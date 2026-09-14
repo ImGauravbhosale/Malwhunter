@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MalwHunter</title>
+<meta name="description" content="MalwHunter hunts for malware deliberately hidden inside your npm dependencies — static Recon, an AI Analyst, and a sandboxed Detonation pass.">
+<style>
+  :root {
+    --bg: #f7faf9;
+    --bg-alt: #eef4f2;
+    --panel: #ffffff;
+    --border: #dde6e3;
+    --ink: #131816;
+    --ink-dim: #5a655f;
+    --accent: #2f8f83;
+    --accent-ink: #ffffff;
+    --red: #c0392b;
+    --yellow: #b3821a;
+    --green: #2f7d4f;
+    --link: #1f7267;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0c110f;
+      --bg-alt: #121815;
+      --panel: #161d1a;
+      --border: #263230;
+      --ink: #e7efec;
+      --ink-dim: #9fada6;
+      --accent: #5fc9bb;
+      --accent-ink: #06201b;
+      --red: #e0664f;
+      --yellow: #d9ac54;
+      --green: #7fc99a;
+      --link: #5fc9bb;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c110f;
+    --bg-alt: #121815;
+    --panel: #161d1a;
+    --border: #263230;
+    --ink: #e7efec;
+    --ink-dim: #9fada6;
+    --accent: #5fc9bb;
+    --accent-ink: #06201b;
+    --red: #e0664f;
+    --yellow: #d9ac54;
+    --green: #7fc99a;
+    --link: #5fc9bb;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  a { color: var(--link); }
+  code, pre { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  code {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .1em .4em;
+    font-size: .9em;
+  }
+  pre {
+    background: #0d1614;
+    color: #dce9e4;
+    border-radius: 10px;
+    padding: 1.1rem 1.3rem;
+    overflow-x: auto;
+    font-size: .88rem;
+    line-height: 1.55;
+  }
+  pre code { background: none; border: none; padding: 0; color: inherit; }
+
+  .shell { max-width: 1080px; margin: 0 auto; padding: 0 1.5rem; }
+
+  header.hero {
+    border-bottom: 1px solid var(--border);
+    padding: 4.5rem 0 3.5rem;
+    background: radial-gradient(60% 100% at 15% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%), var(--bg);
+  }
+  .kicker {
+    display: inline-block;
+    font-size: .78rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 1rem;
+  }
+  h1.title { font-size: clamp(2.2rem, 5vw, 3.2rem); margin: 0 0 .6rem; letter-spacing: -.02em; }
+  .tagline { font-size: 1.2rem; color: var(--ink-dim); max-width: 48ch; margin: 0 0 2rem; }
+  .cta-row { display: flex; gap: .8rem; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: .65rem 1.2rem; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: .92rem; border: 1px solid var(--border); }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  .btn.ghost { color: var(--ink); }
+
+  nav.toc {
+    position: sticky; top: 0; z-index: 5;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav.toc .shell { display: flex; gap: 1.4rem; overflow-x: auto; padding-top: .85rem; padding-bottom: .85rem; }
+  nav.toc a { white-space: nowrap; font-size: .85rem; font-weight: 600; text-decoration: none; color: var(--ink-dim); }
+  nav.toc a:hover { color: var(--accent); }
+
+  section { padding: 3.4rem 0; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: none; }
+  h2 { font-size: 1.6rem; margin: 0 0 .4rem; letter-spacing: -.01em; }
+  .section-lede { color: var(--ink-dim); max-width: 68ch; margin: 0 0 2rem; }
+
+  .thesis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; margin-top: 1.5rem; }
+  @media (max-width: 720px) { .thesis-grid { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 1.4rem 1.5rem; }
+  .card h3 { margin: 0 0 .5rem; font-size: 1rem; }
+  .card p { margin: 0; color: var(--ink-dim); font-size: .93rem; }
+  .card.no { border-left: 3px solid var(--yellow); }
+  .card.yes { border-left: 3px solid var(--green); }
+
+  .diagram-frame { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 1.4rem; overflow-x: auto; margin-top: 1.5rem; }
+  svg.diagram { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+  svg.diagram text { font-family: "SF Mono", Menlo, Consolas, monospace; fill: var(--ink); }
+  svg.diagram .dim { fill: var(--ink-dim); }
+  svg.diagram .arrow-label { fill: var(--ink-dim); font-size: 11px; }
+  figcaption { font-size: .85rem; color: var(--ink-dim); text-align: center; margin-top: 1rem; max-width: 58ch; margin-left: auto; margin-right: auto; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: .88rem; }
+  th, td { text-align: left; padding: .6rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--ink-dim); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+  td code { white-space: nowrap; }
+
+  .tree { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 1.3rem 1.5rem; font-family: "SF Mono", Menlo, Consolas, monospace; font-size: .85rem; line-height: 1.7; overflow-x: auto; color: var(--ink-dim); }
+  .tree .dir { color: var(--ink); font-weight: 600; }
+
+  .status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; margin-top: 1.5rem; }
+  @media (max-width: 720px) { .status-grid { grid-template-columns: 1fr; } }
+  .status-grid ul { margin: .6rem 0 0; padding-left: 1.2rem; color: var(--ink-dim); font-size: .93rem; }
+  .status-grid li { margin-bottom: .4rem; }
+
+  footer { padding: 2.5rem 0 4rem; color: var(--ink-dim); font-size: .85rem; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="shell">
+    <span class="kicker">Open source · npm supply-chain security</span>
+    <h1 class="title">MalwHunter</h1>
+    <p class="tagline">
+      Hunts for malware deliberately hidden inside your dependencies — before it's
+      known, not just after.
+    </p>
+    <div class="cta-row">
+      <a class="btn primary" href="https://github.com/ImGauravbhosale/Malwhunter">View on GitHub</a>
+      <a class="btn ghost" href="#how-it-works">How it works</a>
+      <a class="btn ghost" href="#cli">CLI reference</a>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <div class="shell">
+    <a href="#why">Why</a>
+    <a href="#how-it-works">How it works</a>
+    <a href="#cli">CLI</a>
+    <a href="#architecture">Architecture</a>
+    <a href="#status">Status &amp; roadmap</a>
+  </div>
+</nav>
+
+<main>
+
+<section id="why">
+  <div class="shell">
+    <h2>Why another supply-chain scanner</h2>
+    <p class="section-lede">Most tools tell you about malware after someone else already found it. MalwHunter is built to catch what nobody's seen yet.</p>
+    <div class="thesis-grid">
+      <div class="card no">
+        <h3>Reputation-based scanning</h3>
+        <p><code>npm audit</code>, Socket.dev, Snyk — all mostly match a dependency against a database of already-known bad packages. Useful, but a brand-new malicious package published an hour ago sails straight through.</p>
+      </div>
+      <div class="card no">
+        <h3>Pattern-matching alone</h3>
+        <p>Regex can flag a suspicious-looking blob, but it can't decode and judge one. A base64-encoded payload that unpacks to a credential-harvesting shell command is invisible to pure static analysis.</p>
+      </div>
+      <div class="card yes">
+        <h3>MalwHunter's bet</h3>
+        <p>Combine static pattern-hunting with an actual sandboxed detonation pass. Catch malicious <em>behavior</em>, not just malicious <em>reputation</em> — works even against something nobody has ever seen before.</p>
+      </div>
+      <div class="card yes">
+        <h3>No observation, no verdict</h3>
+        <p>Enforced in code — a Signal cannot exist without evidence attached. Every result traces back to a specific file, line, network destination, or decoded payload.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="how-it-works">
+  <div class="shell">
+    <h2>How it works</h2>
+    <p class="section-lede">
+      Two independent passes feed one artifact — the <strong>Dossier</strong>, one per exact
+      <code>package@version</code>, cacheable across every project that depends on it.
+    </p>
+
+    <figure>
+      <div class="diagram-frame">
+        <svg class="diagram" viewBox="0 0 900 900" role="img" aria-label="A package tarball splits into two independent passes: Recon, a deterministic static catalog with an AI Analyst for ambiguous blobs, and Detonation, a sandboxed dynamic run with a Wiretap recording proxy and canary tripwires. Both feed into the Dossier, which resolves through deterministic verdict combination into clean, suspicious, or malicious.">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
+            </marker>
+          </defs>
+
+          <!-- Package Tarball -->
+          <rect x="300" y="20" width="300" height="44" rx="22" fill="none" stroke="var(--ink-dim)" stroke-width="1.4"></rect>
+          <text x="450" y="47" text-anchor="middle" font-size="13" font-weight="600">Package Tarball</text>
+
+          <line x1="420" y1="64" x2="260" y2="128" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
+          <text x="270" y="100" class="arrow-label">unpack, inspect</text>
+          <line x1="480" y1="64" x2="640" y2="128" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
+          <text x="560" y="100" class="arrow-label">run install scripts</text>
+
+          <!-- Recon -->
+          <rect x="90" y="130" width="280" height="108" rx="14" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"></rect>
+          <text x="230" y="168" text-anchor="middle" font-size="15" font-weight="700">RECON</text>
+          <text x="230" y="190" text-anchor="middle" font-size="11" class="dim">static, deterministic</text>
+          <text x="230" y="210" text-anchor="middle" font-size="11" class="dim">shell abuse · eval · entropy · typosquat</text>
+
+          <!-- Detonation -->
+          <rect x="530" y="130" width="280" height="108" rx="14" fill="var(--panel)" stroke="var(--red)" stroke-width="1.6"></rect>
+          <text x="670" y="168" text-anchor="middle" font-size="15" font-weight="700">DETONATION</text>
+          <text x="670" y="190" text-anchor="middle" font-size="11" class="dim">sandboxed, single-use container</text>
+          <text x="670" y="210" text-anchor="middle" font-size="11" class="dim">read-only fs · cap-drop=ALL · timeout</text>
+
+          <line x1="230" y1="238" x2="230" y2="270" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
+          <text x="246" y="258" class="arrow-label">ambiguous blob</text>
+          <line x1="670" y1="238" x2="670" y2="270" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
+          <text x="686" y="258" class="arrow-label">traffic</text>
+
+          <!-- Analyst -->
+          <rect x="90" y="270" width="280" height="86" rx="12" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.4"></rect>
+          <text x="230" y="300" text-anchor="middle" font-size="13" font-weight="700" fill="var(--accent)">ANALYST</text>
+          <text x="230" y="320" text-anchor="middle" font-size="10.5" class="dim">2 AI passes, second opinion</text>
+          <text x="230" y="338" text-anchor="middle" font-size="10.5" class="dim">decodes what regex only flags</text>
+
+          <!-- Wiretap -->
+          <rect x="530" y="270" width="280" height="86" rx="12" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.4"></rect>
+          <text x="670" y="300" text-anchor="middle" font-size="13" font-weight="700" fill="var(--accent)">WIRETAP</text>
+          <text x="670" y="320" text-anchor="middle" font-size="10.5" class="dim">recording proxy + canary tripwires</text>
+          <text x="670" y="338" text-anchor="middle" font-size="10.5" class="dim">lets traffic complete, logs everything</text>
+
+          <line x1="270" y1="356" x2="410" y2="450" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
+          <line x1="630" y1="356" x2="490" y2="450" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
+
+          <!-- The Dossier (diamond) -->
+          <polygon points="450,390 565,500 450,610 335,500" fill="var(--panel)" stroke="var(--ink)" stroke-width="1.8"></polygon>
+          <text x="450" y="495" text-anchor="middle" font-size="15" font-weight="700">THE DOSSIER</text>
+          <text x="450" y="516" text-anchor="middle" font-size="10.5" class="dim">signals + evidence</text>
+
+          <line x1="450" y1="610" x2="450" y2="648" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
+
+          <!-- Verdict Combination -->
+          <rect x="300" y="650" width="300" height="90" rx="14" fill="var(--panel)" stroke="var(--border)" stroke-width="1.4"></rect>
+          <text x="450" y="686" text-anchor="middle" font-size="14" font-weight="700">VERDICT COMBINATION</text>
+          <text x="450" y="708" text-anchor="middle" font-size="11" class="dim">deterministic rules, no reputation lookup</text>
+          <text x="450" y="726" text-anchor="middle" font-size="11" class="dim">canary alone, or two sources agreeing</text>
+
+          <line x1="380" y1="740" x2="220" y2="790" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
+          <line x1="450" y1="740" x2="450" y2="790" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
+          <line x1="520" y1="740" x2="680" y2="790" stroke="var(--red)" stroke-width="1.6" marker-end="url(#arrow)"></line>
+
+          <rect x="140" y="796" width="160" height="50" rx="25" fill="none" stroke="var(--green)" stroke-width="1.4"></rect>
+          <text x="220" y="826" text-anchor="middle" font-size="13" font-weight="700" fill="var(--green)">CLEAN</text>
+
+          <rect x="370" y="796" width="160" height="50" rx="25" fill="none" stroke="var(--yellow)" stroke-width="1.4"></rect>
+          <text x="450" y="826" text-anchor="middle" font-size="13" font-weight="700" fill="var(--yellow)">SUSPICIOUS</text>
+
+          <rect x="600" y="796" width="160" height="50" rx="25" fill="var(--red)"></rect>
+          <text x="680" y="826" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">MALICIOUS</text>
+        </svg>
+      </div>
+      <figcaption>Recon and Detonation run independently — Analyst and Wiretap are how each one handles what it alone can't resolve — and both converge on the same Dossier.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="cli">
+  <div class="shell">
+    <h2>CLI reference</h2>
+    <pre><code>uv sync
+uv run malwhunter inspect left-pad@1.3.0</code></pre>
+
+    <table>
+      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>malwhunter scan .</code></td><td>Resolve the project's package.json/lockfile and hunt every dependency.</td></tr>
+        <tr><td><code>malwhunter scan . --no-detonate</code></td><td>Recon + Analyst only — no Docker needed, much faster.</td></tr>
+        <tr><td><code>malwhunter inspect &lt;name&gt;@&lt;version&gt;</code></td><td>Deep-dive a single package.</td></tr>
+        <tr><td><code>--format json|markdown|terminal</code></td><td>Output format — terminal is colorized ANSI.</td></tr>
+        <tr><td><code>--fail-on malicious|suspicious|none</code></td><td>Exit 1 if any package reaches this verdict level or worse (default: malicious).</td></tr>
+        <tr><td><code>--ai / --no-ai</code></td><td>Enable/disable the Analyst. Falls back automatically if <code>claude</code> isn't on PATH.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="shell">
+    <h2>Architecture</h2>
+    <p class="section-lede">One Dossier model, two independent detection passes, a narrow AI layer used only where pattern-matching structurally can't reach.</p>
+
+    <div class="tree"><pre style="margin:0; background:none; color:inherit; padding:0;"><span class="dir">malwhunter/</span>
+├─ <span class="dir">intake/</span>      <span class="dim"># package.json/lockfile parsing, npm registry fetch, safe tarball extraction</span>
+├─ <span class="dir">recon/</span>       <span class="dim"># the static signal catalog — regex/entropy heuristics</span>
+├─ <span class="dir">chamber/</span>     <span class="dim"># Docker orchestration for the sandboxed Detonation run</span>
+├─ <span class="dir">wiretap/</span>     <span class="dim"># the recording proxy + canary/tripwire injection</span>
+├─ <span class="dir">analyst/</span>     <span class="dim"># the narrow AI-judgment layer — own prompts, own interface</span>
+├─ <span class="dir">dossier/</span>     <span class="dim"># the Dossier/Signal/Verdict model — evidence is mandatory</span>
+├─ <span class="dir">report/</span>      <span class="dim"># JSON / Markdown / terminal output</span>
+└─ cli.py          <span class="dim"># `malwhunter scan` / `malwhunter inspect`</span></pre></div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="shell">
+    <h2>Status &amp; roadmap</h2>
+    <p class="section-lede">Early and under active development.</p>
+    <div class="status-grid">
+      <div class="card yes">
+        <h3>Built &amp; live-verified</h3>
+        <ul>
+          <li>Recon's full catalog, real npm registry fetch, path-traversal-safe extraction</li>
+          <li>The Analyst's two-pass second opinion — proven live against a base64-encoded RCE payload regex alone can't decode</li>
+          <li>Deterministic verdict combination</li>
+          <li>JSON / Markdown / colorized terminal reporting</li>
+        </ul>
+      </div>
+      <div class="card no">
+        <h3>Built, not yet live-verified / not started</h3>
+        <ul>
+          <li>The Detonation sandbox's full chain (container → proxy → tripwire) — components are individually tested, the end-to-end run needs Docker running to confirm</li>
+          <li>Ecosystems beyond npm (PyPI is structurally different)</li>
+          <li>Runtime instrumentation beyond install-lifecycle scripts</li>
+          <li>Package reputation/history signals, a CI <code>watch</code> mode</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="shell">
+    MalwHunter — open source, no affiliation with any commercial security vendor.
+    <a href="https://github.com/ImGauravbhosale/Malwhunter">Source on GitHub</a>.
+  </div>
+</footer>
+
+</body>
+</html>
