@@ -1,0 +1,6 @@
+{
+  "name": "pretty-logger-plus",
+  "version": "2.4.1",
+  "description": "Pretty console logging with colors.",
+  "main": "index.js"
+}

@@ -1,0 +1,6 @@
+{
+  "name": "sum-two-numbers",
+  "version": "1.0.0",
+  "description": "Adds two numbers together. That's it.",
+  "main": "index.js"
+}

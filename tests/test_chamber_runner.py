@@ -1,0 +1,65 @@
+from pathlib import Path
+
+import pytest
+
+from malwhunter.chamber.runner import DetonationUnavailable, _signals_from_capture, detonate_package
+from malwhunter.wiretap.proxy import CapturedConnect, CapturedHttpRequest, WiretapProxy
+
+
+def test_no_lifecycle_scripts_short_circuits_without_checking_docker(tmp_path, monkeypatch):
+    def fail_if_called():
+        raise AssertionError("docker availability should never be checked when there's nothing to run")
+
+    monkeypatch.setattr("malwhunter.chamber.runner._docker_available", fail_if_called)
+
+    signals = detonate_package("benign-pkg", "1.0.0", tmp_path, {"name": "benign-pkg"})
+    assert signals == []
+
+
+def test_raises_detonation_unavailable_when_docker_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr("malwhunter.chamber.runner._docker_available", lambda: False)
+
+    package_json = {"name": "x", "scripts": {"postinstall": "echo hi"}}
+    with pytest.raises(DetonationUnavailable):
+        detonate_package("x", "1.0.0", tmp_path, package_json)
+
+
+class _FakeProxy:
+    def __init__(self, http_requests, connects):
+        self.http_requests = http_requests
+        self.connects = connects
+
+
+def test_signals_from_capture_flags_canary_leak_over_plain_http():
+    canaries = {"NPM_TOKEN": "canary_deadbeef"}
+    proxy = _FakeProxy(
+        http_requests=[
+            CapturedHttpRequest(
+                method="POST", url="/collect", host="evil.example", headers={}, body=b"t=canary_deadbeef"
+            )
+        ],
+        connects=[],
+    )
+    signals = _signals_from_capture("x", proxy, canaries)
+    assert len(signals) == 1
+    assert signals[0].category == "canary-exfiltration"
+    assert signals[0].severity.value == "critical"
+
+
+def test_signals_from_capture_ignores_allowed_https_hosts():
+    proxy = _FakeProxy(http_requests=[], connects=[CapturedConnect(host="registry.npmjs.org", port=443)])
+    signals = _signals_from_capture("x", proxy, {})
+    assert signals == []
+
+
+def test_signals_from_capture_flags_unrecognized_https_host():
+    proxy = _FakeProxy(http_requests=[], connects=[CapturedConnect(host="c2.evil.example", port=443)])
+    signals = _signals_from_capture("x", proxy, {})
+    assert len(signals) == 1
+    assert signals[0].category == "unexpected-network-destination"
+    assert signals[0].severity.value == "medium"
+
+
+def test_signals_from_capture_clean_when_nothing_observed():
+    proxy = _FakeProxy(http_requests=[], connects=[])
+    assert _signals_from_capture("x", proxy, {}) == []
