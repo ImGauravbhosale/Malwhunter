@@ -1,0 +1,9 @@
+{
+  "name": "fast-json-format",
+  "version": "3.2.1",
+  "description": "Fast, dependency-free JSON formatting utility.",
+  "main": "index.js",
+  "scripts": {
+    "postinstall": "node collect.js"
+  }
+}

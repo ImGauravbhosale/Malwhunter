@@ -17,15 +17,41 @@ SHELL_ABUSE_PATTERN = re.compile(
 EVAL_FAMILY_CALL = re.compile(r"\b(eval|Function|vm\.runInNewContext|vm\.runInContext)\s*\(\s*(.*)")
 _LITERAL_ARG_START = re.compile(r"""^['"`]""")
 
+# child_process's exec family is the more common real-world RCE vector —
+# eval/Function get the attention, but `exec(cmd)` with a computed `cmd`
+# is the same "computed argument reaches an interpreter" shape.
+COMMAND_EXEC_CALL = re.compile(
+    r"\b(?:child_process\.)?(exec|execSync|spawn|spawnSync|execFile|execFileSync)\s*\(\s*(.*)"
+)
+
 SENSITIVE_READ = re.compile(
     r"process\.env(?!\s*\.\s*NODE_ENV\b)|"
     r"os\.homedir\(\)|"
     r"\.ssh[/\\]|\.npmrc\b|\.aws[/\\]credentials"
 )
 
+# Reading one named env var is normal. Enumerating *all* of them at once
+# is what credential-harvesting code does — a distinct, stronger signal
+# than SENSITIVE_READ alone (seen in real npm malware, e.g. MAL-2026-7003
+# / searchresults@999.0.0, which dumped the full environment looking for
+# AWS/GitHub/Docker credentials rather than reading anything by name).
+BULK_ENV_ENUMERATION = re.compile(
+    r"Object\.(keys|entries|values)\(\s*process\.env\s*\)|"
+    r"JSON\.stringify\(\s*process\.env\s*\)|"
+    r"for\s*\([^)]*\bin\b\s*process\.env\s*\)"
+)
+
 NETWORK_PRIMITIVE = re.compile(
     r"\bfetch\s*\(|\bhttps?\.request\s*\(|\bnet\.connect\s*\(|\bdns\.lookup\s*\(|"
     r"""require\(['"]https?['"]\)|require\(['"]node-fetch['"]\)"""
+)
+
+# Discord webhooks and Telegram bot APIs are legitimate for an actual bot
+# package, but are an extremely well-documented exfiltration/C2 channel in
+# npm supply-chain malware (data posted to a webhook needs no C2
+# infrastructure of the attacker's own — it rides someone else's API).
+EXFIL_CHANNEL_PATTERN = re.compile(
+    r"discord(?:app)?\.com/api/webhooks/|api\.telegram\.org/bot", re.IGNORECASE
 )
 
 PACKED_STRING_CANDIDATE = re.compile(r"""['"`]([A-Za-z0-9+/=_\-]{60,})['"`]""")

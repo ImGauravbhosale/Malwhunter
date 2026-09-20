@@ -11,3 +11,6 @@ wheels/
 
 # MalwHunter's own scratch state
 .malwhunter/
+
+# macOS
+.DS_Store

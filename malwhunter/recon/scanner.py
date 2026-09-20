@@ -9,7 +9,10 @@ from pathlib import Path
 from malwhunter.analyst.session import Analyst
 from malwhunter.dossier.model import Evidence, Severity, Signal, SignalSource, signal_id
 from malwhunter.recon.catalog import (
+    BULK_ENV_ENUMERATION,
+    COMMAND_EXEC_CALL,
     EVAL_FAMILY_CALL,
+    EXFIL_CHANNEL_PATTERN,
     NETWORK_PRIMITIVE,
     PACKED_STRING_CANDIDATE,
     SENSITIVE_READ,
@@ -97,6 +100,43 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
                     category="eval-computed-arg",
                     severity=Severity.HIGH,
                     description=f"`{eval_match.group(1)}` called with a computed (non-literal) argument",
+                    evidence=[Evidence(excerpt=line.strip(), file=rel_path, line=lineno)],
+                )
+            )
+
+        exec_match = COMMAND_EXEC_CALL.search(line)
+        if exec_match and has_computed_arg(exec_match):
+            signals.append(
+                Signal(
+                    id=signal_id(SignalSource.RECON, "command-exec-computed-arg", f"{rel_path}:{lineno}"),
+                    source=SignalSource.RECON,
+                    category="command-exec-computed-arg",
+                    severity=Severity.HIGH,
+                    description=f"`{exec_match.group(1)}` called with a computed (non-literal) command",
+                    evidence=[Evidence(excerpt=line.strip(), file=rel_path, line=lineno)],
+                )
+            )
+
+        if EXFIL_CHANNEL_PATTERN.search(line):
+            signals.append(
+                Signal(
+                    id=signal_id(SignalSource.RECON, "known-exfil-channel", f"{rel_path}:{lineno}"),
+                    source=SignalSource.RECON,
+                    category="known-exfil-channel",
+                    severity=Severity.HIGH,
+                    description="references a Discord webhook or Telegram bot API endpoint — a common exfiltration channel in npm supply-chain malware",
+                    evidence=[Evidence(excerpt=line.strip(), file=rel_path, line=lineno)],
+                )
+            )
+
+        if BULK_ENV_ENUMERATION.search(line):
+            signals.append(
+                Signal(
+                    id=signal_id(SignalSource.RECON, "bulk-env-enumeration", f"{rel_path}:{lineno}"),
+                    source=SignalSource.RECON,
+                    category="bulk-env-enumeration",
+                    severity=Severity.HIGH,
+                    description="enumerates the entire environment rather than reading a specific named variable",
                     evidence=[Evidence(excerpt=line.strip(), file=rel_path, line=lineno)],
                 )
             )

@@ -35,3 +35,17 @@ def test_every_signal_has_evidence():
             assert len(signal.evidence) > 0
             for e in signal.evidence:
                 assert e.excerpt
+
+
+def test_env_harvester_triggers_all_three_new_signals():
+    """Modeled on the real MAL-2026-7003 (searchresults@999.0.0) technique:
+    a postinstall that isn't a raw curl|sh one-liner, so lifecycle-script-
+    abuse alone would miss it entirely — the new signals exist to catch
+    exactly this shape."""
+    signals = _run("env-harvester")
+    categories = {s.category for s in signals}
+    assert "bulk-env-enumeration" in categories
+    assert "known-exfil-channel" in categories
+    assert "command-exec-computed-arg" in categories
+    # and confirm the gap this fixture demonstrates:
+    assert "lifecycle-script-abuse" not in categories
