@@ -2,6 +2,8 @@
 name = "malwhunter"
 version = "0.1.0"
 description = "Supply-chain package malware hunter — static Recon + sandboxed Detonation."
+readme = "README.md"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "click>=8.5.0",

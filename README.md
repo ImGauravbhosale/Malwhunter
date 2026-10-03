@@ -146,5 +146,4 @@ Detonation/Analyst passes.
 
 ## License
 
-Not yet chosen — treat this repository as all-rights-reserved until a
-LICENSE file is added.
+[MIT](LICENSE)
