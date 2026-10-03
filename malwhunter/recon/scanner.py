@@ -4,6 +4,7 @@ evidence — a file, a line, an excerpt — never a bare verdict.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from malwhunter.analyst.session import Analyst
@@ -77,6 +78,39 @@ def scan_typosquat(package_name: str) -> list[Signal]:
     ]
 
 
+_CHILD_PROCESS_IMPORT = re.compile(
+    r"""require\(\s*['"](?:node:)?child_process['"]\s*\)|"""
+    r"""from\s+['"](?:node:)?child_process['"]"""
+)
+
+
+def _is_regexp_exec_false_positive(line: str, exec_match, file_imports_child_process: bool) -> bool:
+    """`someRegex.exec(str)` is one of the most common idioms in all of
+    JavaScript — RegExp.prototype.exec — and it's indistinguishable from
+    `someHandle.exec(cmd)` by name alone. Found by live-benchmarking the
+    scanner against 20 real, well-known packages: ms, chalk, axios,
+    semver, and others all legitimately call `.exec()` on a regex, and
+    every one of them was flagged HIGH severity for it, escalating their
+    verdict to `suspicious`. Only "exec" collides with a legitimate
+    built-in this way — spawn/execFile/execSync/spawnSync have no such
+    namesake, so those stay flagged regardless of how they're called.
+
+    A bare (non-dotted) `exec(...)` — the common
+    `const { exec } = require('child_process')` destructuring pattern —
+    is unaffected by this check. A dotted call is only suppressed when
+    the file never imports child_process *at all* — checking the file,
+    not the literal variable name, so a real child_process user aliased
+    to `cp`/`childProcess`/anything else still gets flagged; only a file
+    with no child_process import anywhere can be the regex case.
+    """
+    if exec_match.group(1) != "exec":
+        return False
+    preceding = line[: exec_match.start(1)].rstrip()
+    if not preceding.endswith("."):
+        return False
+    return not file_imports_child_process
+
+
 def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) -> list[Signal]:
     signals: list[Signal] = []
     try:
@@ -86,6 +120,7 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
 
     rel_path = str(path.relative_to(package_dir))
     lines = text.splitlines()
+    file_imports_child_process = bool(_CHILD_PROCESS_IMPORT.search(text))
 
     sensitive_evidence: Evidence | None = None
     network_evidence: Evidence | None = None
@@ -105,7 +140,11 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
             )
 
         exec_match = COMMAND_EXEC_CALL.search(line)
-        if exec_match and has_computed_arg(exec_match):
+        if (
+            exec_match
+            and has_computed_arg(exec_match)
+            and not _is_regexp_exec_false_positive(line, exec_match, file_imports_child_process)
+        ):
             signals.append(
                 Signal(
                     id=signal_id(SignalSource.RECON, "command-exec-computed-arg", f"{rel_path}:{lineno}"),

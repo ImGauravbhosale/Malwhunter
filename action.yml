@@ -1,0 +1,100 @@
+name: "MalwHunter Dependency Scan"
+description: >-
+  Hunts for malware deliberately hidden in npm dependencies — static
+  Recon + an AI second opinion + sandboxed Detonation with canary
+  tripwires — and fails the job on a real finding.
+author: "Gaurav Bhosale"
+branding:
+  icon: "shield"
+  color: "red"
+
+inputs:
+  path:
+    description: "Subdirectory to scan, relative to the checked-out repo (leave empty to scan the repo root)"
+    required: false
+    default: ""
+  fail-on:
+    description: "Fail the job on this verdict level or worse: malicious, suspicious, none"
+    required: false
+    default: "malicious"
+  detonate:
+    description: "Detonation mode: smart (default, reputation-gated — fast), always, never"
+    required: false
+    default: "smart"
+  ai:
+    description: >-
+      Let the Analyst review ambiguous findings. Needs an authenticated
+      `claude` CLI session, which most CI runners don't have — defaults
+      off so the scan degrades intentionally, not silently.
+    required: false
+    default: "false"
+  format:
+    description: "Report format: json, markdown, terminal"
+    required: false
+    default: "json"
+
+outputs:
+  report-path:
+    description: "Absolute path to the written report file"
+    value: ${{ steps.scan.outputs.report-path }}
+  verdict-summary:
+    description: "One-line pass/fail summary"
+    value: ${{ steps.scan.outputs.verdict-summary }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        python-version: "3.12"
+
+    - name: Install MalwHunter
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: uv sync --no-dev
+
+    - name: Run scan
+      id: scan
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        set +e
+
+        # The scan target is the CALLING repo's checkout
+        # ($GITHUB_WORKSPACE), never this action's own installed
+        # location — github.action_path is only where MalwHunter itself
+        # lives, not what it should scan.
+        if [ -z "${{ inputs.path }}" ]; then
+          SCAN_PATH="$GITHUB_WORKSPACE"
+        else
+          SCAN_PATH="$GITHUB_WORKSPACE/${{ inputs.path }}"
+        fi
+
+        AI_FLAG="--no-ai"
+        if [ "${{ inputs.ai }}" = "true" ]; then AI_FLAG="--ai"; fi
+
+        DETONATE_FLAG=""
+        if [ "${{ inputs.detonate }}" = "never" ]; then DETONATE_FLAG="--no-detonate"; fi
+        if [ "${{ inputs.detonate }}" = "always" ]; then DETONATE_FLAG="--always-detonate"; fi
+
+        REPORT="$RUNNER_TEMP/malwhunter-report.${{ inputs.format }}"
+
+        uv run malwhunter scan "$SCAN_PATH" \
+          $AI_FLAG \
+          $DETONATE_FLAG \
+          --fail-on "${{ inputs.fail-on }}" \
+          --format "${{ inputs.format }}" \
+          --out "$REPORT"
+        CODE=$?
+
+        echo "report-path=$REPORT" >> "$GITHUB_OUTPUT"
+        if [ $CODE -eq 0 ]; then
+          echo "verdict-summary=no findings at or above '${{ inputs.fail-on }}'" >> "$GITHUB_OUTPUT"
+          echo "::notice::MalwHunter: no findings at or above '${{ inputs.fail-on }}'"
+        else
+          echo "verdict-summary=findings at or above '${{ inputs.fail-on }}' — see the report" >> "$GITHUB_OUTPUT"
+          echo "::error::MalwHunter found a dependency at or above '${{ inputs.fail-on }}' — see $REPORT"
+        fi
+
+        exit $CODE

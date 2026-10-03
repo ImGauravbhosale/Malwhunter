@@ -94,6 +94,23 @@ The Analyst's default backend is your own authenticated `claude` CLI
 session — no separate API key needed. Detonation needs Docker Desktop
 running locally.
 
+## Running in CI/CD
+
+Packaged as a GitHub Action ([`action.yml`](action.yml)) — no manual
+clone/install step needed in your own workflow:
+
+```yaml
+- uses: ImGauravbhosale/Malwhunter@v0.1.0
+  with:
+    fail-on: malicious   # malicious | suspicious | none
+    # detonate: smart    # smart (default) | always | never
+    # ai: "false"        # most CI runners have no authenticated `claude` session
+```
+
+GitHub-hosted runners already have Docker running, so Detonation works
+with zero extra setup — the smart pre-filter (on by default) is what
+keeps this fast enough to run on every PR instead of timing out.
+
 ## Status
 
 Early, under active development.
