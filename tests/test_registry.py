@@ -70,3 +70,42 @@ def test_extract_tarball_refuses_path_traversal(tmp_path: Path):
 
     # Whatever happened, nothing must have escaped the destination directory.
     assert not (tmp_path / "evil.sh").exists()
+
+
+from malwhunter.intake.registry import fetch_package_reputation
+
+
+def _mock_reputation_client(time_doc: dict | None, downloads_doc: dict | None, *, time_status=200, downloads_status=200) -> httpx.Client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "api.npmjs.org" in str(request.url):
+            if downloads_status != 200:
+                return httpx.Response(downloads_status)
+            return httpx.Response(200, json=downloads_doc)
+        if time_status != 200:
+            return httpx.Response(time_status)
+        return httpx.Response(200, json={"time": time_doc or {}})
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_fetch_package_reputation_happy_path():
+    client = _mock_reputation_client(
+        {"1.0.0": "2020-01-01T00:00:00.000Z"},
+        {"downloads": 50000},
+    )
+    rep = fetch_package_reputation("left-pad", "1.0.0", client=client)
+    assert rep.downloads_last_month == 50000
+    assert rep.age_days is not None and rep.age_days > 1000  # published in 2020
+
+
+def test_fetch_package_reputation_missing_version_in_time_doc_is_none():
+    client = _mock_reputation_client({"0.9.0": "2020-01-01T00:00:00.000Z"}, {"downloads": 10})
+    rep = fetch_package_reputation("left-pad", "1.0.0", client=client)
+    assert rep.age_days is None
+
+
+def test_fetch_package_reputation_never_raises_on_registry_errors():
+    client = _mock_reputation_client(None, None, time_status=500, downloads_status=500)
+    rep = fetch_package_reputation("left-pad", "1.0.0", client=client)
+    assert rep.age_days is None
+    assert rep.downloads_last_month is None

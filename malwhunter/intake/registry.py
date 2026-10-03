@@ -6,15 +6,76 @@ bug in extraction would be a real vulnerability, not just a bug.
 from __future__ import annotations
 
 import tarfile
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
 
 NPM_REGISTRY = "https://registry.npmjs.org"
+NPM_DOWNLOADS_API = "https://api.npmjs.org/downloads/point/last-month"
 
 
 class PackageFetchError(Exception):
     pass
+
+
+@dataclass
+class PackageReputation:
+    """Cheap, registry-only signal about how established a package is —
+    used to decide whether a package is worth the cost of a full
+    Detonation pass. Fields are None on any lookup failure (network
+    error, missing data) rather than raising: a flaky reputation lookup
+    should never block a scan, and "unknown" reputation deliberately
+    fails toward detonating, not skipping."""
+
+    age_days: int | None
+    downloads_last_month: int | None
+
+
+def fetch_package_reputation(name: str, version: str, *, client: httpx.Client | None = None) -> PackageReputation:
+    owns_client = client is None
+    client = client or httpx.Client(timeout=10.0)
+    try:
+        age_days = _fetch_version_age_days(name, version, client)
+        downloads = _fetch_downloads_last_month(name, client)
+        return PackageReputation(age_days=age_days, downloads_last_month=downloads)
+    finally:
+        if owns_client:
+            client.close()
+
+
+def _fetch_version_age_days(name: str, version: str, client: httpx.Client) -> int | None:
+    try:
+        resp = client.get(f"{NPM_REGISTRY}/{name}")
+        if resp.status_code != 200:
+            return None
+        published_at = resp.json().get("time", {}).get(version)
+        if not published_at:
+            return None
+        published = _parse_iso8601(published_at)
+        if published is None:
+            return None
+        return (datetime.now(timezone.utc) - published).days
+    except (httpx.HTTPError, ValueError, KeyError):
+        return None
+
+
+def _parse_iso8601(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _fetch_downloads_last_month(name: str, client: httpx.Client) -> int | None:
+    try:
+        resp = client.get(f"{NPM_DOWNLOADS_API}/{name}")
+        if resp.status_code != 200:
+            return None
+        return resp.json().get("downloads")
+    except (httpx.HTTPError, ValueError, KeyError):
+        return None
 
 
 def fetch_package_metadata(name: str, version: str, *, client: httpx.Client | None = None) -> dict:

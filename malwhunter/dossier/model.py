@@ -94,6 +94,7 @@ class Dossier:
     ecosystem: Ecosystem = Ecosystem.NPM
     signals: list[Signal] = field(default_factory=list)
     detonated: bool = False
+    detonation_decision_reason: str | None = None
 
     @property
     def dossier_key(self) -> str:
@@ -110,6 +111,7 @@ class Dossier:
             "version": self.version,
             "ecosystem": self.ecosystem.value,
             "detonated": self.detonated,
+            "detonation_decision_reason": self.detonation_decision_reason,
             "verdict": compute_verdict(self.signals).value,
             "signals": [s.to_dict() for s in self.signals],
         }

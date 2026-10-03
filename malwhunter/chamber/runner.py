@@ -19,13 +19,17 @@ from malwhunter.intake.manifest import get_lifecycle_scripts
 from malwhunter.wiretap.canary import find_leaked_canaries, generate_canaries
 from malwhunter.wiretap.proxy import WiretapProxy
 
-CONTAINER_IMAGE = "node:20-slim"
+CONTAINER_IMAGE = "malwhunter-sandbox:latest"
 CONTAINER_TIMEOUT_SECONDS = 30
+_DOCKERFILE_DIR = Path(__file__).parent
 
-# Destinations a legitimate install commonly needs — anything else over
-# HTTPS is flagged as "unexpected," not "confirmed malicious": plenty of
-# real packages fetch prebuilt binaries from CDNs we haven't listed.
-ALLOWED_HTTPS_HOSTS = {
+# Destinations a legitimate install commonly needs — anything else is
+# flagged as "unexpected," not "confirmed malicious": plenty of real
+# packages fetch prebuilt binaries from CDNs we haven't listed. Applied to
+# both HTTPS CONNECT tunnels and plain HTTP requests — a `curl|sh`
+# postinstall dropper (one of the most common real malware patterns) uses
+# plain HTTP as often as HTTPS, and both need the same check.
+ALLOWED_HOSTS = {
     "registry.npmjs.org",
     "github.com",
     "raw.githubusercontent.com",
@@ -46,6 +50,32 @@ def _docker_available() -> bool:
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False
+
+
+def _sandbox_image_exists() -> bool:
+    result = subprocess.run(
+        ["docker", "image", "inspect", CONTAINER_IMAGE], capture_output=True, timeout=5
+    )
+    return result.returncode == 0
+
+
+def _ensure_sandbox_image() -> None:
+    """Builds the sandbox image from chamber/Dockerfile on first use —
+    plain node:20-slim doesn't include curl or wget, so a package that
+    droppers malware via `curl | sh` (a common real pattern) would
+    silently no-op inside it and produce a false-clean result. Docker
+    caches the build, so this is a no-op after the first run."""
+    if _sandbox_image_exists():
+        return
+    result = subprocess.run(
+        ["docker", "build", "-t", CONTAINER_IMAGE, str(_DOCKERFILE_DIR)],
+        capture_output=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        raise DetonationUnavailable(
+            f"could not build the sandbox image: {result.stderr.decode(errors='replace')[-500:]}"
+        )
 
 
 class _ProxyThread:
@@ -87,11 +117,20 @@ class _ProxyThread:
 def _build_docker_command(
     scratch_path: Path, proxy_port: int, canaries: dict[str, str], script_chain: str
 ) -> list[str]:
+    proxy_url = f"http://host.docker.internal:{proxy_port}"
     cmd = [
         "docker", "run", "--rm",
         "--add-host=host.docker.internal:host-gateway",
-        "-e", f"HTTP_PROXY=http://host.docker.internal:{proxy_port}",
-        "-e", f"HTTPS_PROXY=http://host.docker.internal:{proxy_port}",
+        # Both cases, deliberately: curl only honors lowercase http_proxy
+        # for plain http:// requests (its documented httpoxy-related
+        # behavior — HTTP_PROXY uppercase is ignored on purpose), while
+        # other tools expect uppercase. Found by live-testing a real
+        # curl|sh dropper against this sandbox and getting zero signals
+        # because curl was silently bypassing the proxy entirely.
+        "-e", f"HTTP_PROXY={proxy_url}",
+        "-e", f"http_proxy={proxy_url}",
+        "-e", f"HTTPS_PROXY={proxy_url}",
+        "-e", f"https_proxy={proxy_url}",
     ]
     for key, value in canaries.items():
         cmd += ["-e", f"{key}={value}"]
@@ -114,6 +153,7 @@ def detonate_package(name: str, version: str, package_dir: Path, package_json: d
 
     if not _docker_available():
         raise DetonationUnavailable("Docker daemon is not reachable (is Docker Desktop running?)")
+    _ensure_sandbox_image()
 
     canaries = generate_canaries()
     proxy_thread = _ProxyThread()
@@ -159,8 +199,21 @@ def _signals_from_capture(name: str, proxy: WiretapProxy, canaries: dict[str, st
                 )
             )
 
+        req_host = req.host.rpartition(":")[0] or req.host  # strip ":port" if present
+        if req_host and req_host not in ALLOWED_HOSTS:
+            signals.append(
+                Signal(
+                    id=signal_id(SignalSource.DETONATION, "unexpected-network-destination", f"{name}:{req_host}:{req.url}"),
+                    source=SignalSource.DETONATION,
+                    category="unexpected-network-destination",
+                    severity=Severity.MEDIUM,
+                    description=f"install script made a plain-HTTP request to an unrecognized host: {req_host}",
+                    evidence=[Evidence(excerpt=f"{req.method} {req.url}", detail=f"destination={req_host}")],
+                )
+            )
+
     for connect in proxy.connects:
-        if connect.host not in ALLOWED_HTTPS_HOSTS:
+        if connect.host not in ALLOWED_HOSTS:
             signals.append(
                 Signal(
                     id=signal_id(

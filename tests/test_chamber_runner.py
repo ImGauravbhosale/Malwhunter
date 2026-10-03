@@ -31,6 +31,11 @@ class _FakeProxy:
 
 
 def test_signals_from_capture_flags_canary_leak_over_plain_http():
+    # A canary leaked to a host that's ALSO unrecognized is legitimately
+    # two separate true findings — canary-exfiltration (the stronger,
+    # near-zero-false-positive one) and unexpected-network-destination
+    # (the host itself isn't on the allow-list either). Both are real;
+    # neither should be suppressed in favor of the other.
     canaries = {"NPM_TOKEN": "canary_deadbeef"}
     proxy = _FakeProxy(
         http_requests=[
@@ -41,13 +46,42 @@ def test_signals_from_capture_flags_canary_leak_over_plain_http():
         connects=[],
     )
     signals = _signals_from_capture("x", proxy, canaries)
-    assert len(signals) == 1
-    assert signals[0].category == "canary-exfiltration"
-    assert signals[0].severity.value == "critical"
+    categories = {s.category for s in signals}
+    assert categories == {"canary-exfiltration", "unexpected-network-destination"}
+    canary_signal = next(s for s in signals if s.category == "canary-exfiltration")
+    assert canary_signal.severity.value == "critical"
 
 
 def test_signals_from_capture_ignores_allowed_https_hosts():
     proxy = _FakeProxy(http_requests=[], connects=[CapturedConnect(host="registry.npmjs.org", port=443)])
+    signals = _signals_from_capture("x", proxy, {})
+    assert signals == []
+
+
+def test_signals_from_capture_flags_plain_http_dropper_to_unrecognized_host():
+    # The exact real-world shape found by live-testing Detonation: a
+    # `curl | sh` postinstall dropper over plain HTTP, no canary
+    # involved at all — must still be caught, not just the HTTPS/CONNECT
+    # path and not just canary-leak detection.
+    proxy = _FakeProxy(
+        http_requests=[
+            CapturedHttpRequest(method="GET", url="/setup.sh", host="198.51.100.7", headers={}, body=b"")
+        ],
+        connects=[],
+    )
+    signals = _signals_from_capture("x", proxy, {})
+    assert len(signals) == 1
+    assert signals[0].category == "unexpected-network-destination"
+    assert signals[0].severity.value == "medium"
+
+
+def test_signals_from_capture_ignores_plain_http_to_allowed_host():
+    proxy = _FakeProxy(
+        http_requests=[
+            CapturedHttpRequest(method="GET", url="/pkg", host="registry.npmjs.org:80", headers={}, body=b"")
+        ],
+        connects=[],
+    )
     signals = _signals_from_capture("x", proxy, {})
     assert signals == []
 

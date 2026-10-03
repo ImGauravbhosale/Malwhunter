@@ -26,10 +26,17 @@ def dossiers_to_terminal(dossiers: list[Dossier], target: str) -> str:
     suspicious = verdicts.count("suspicious")
     clean = verdicts.count("clean")
 
+    detonated_count = sum(1 for d in dossiers if d.detonated)
+    skipped_count = len(dossiers) - detonated_count
+
     lines.append(f"{_BOLD}MALWHUNTER SCAN{_RESET}  {_DIM}{target}{_RESET}")
     lines.append(
         f"{_RED}{malicious} malicious{_RESET} · {_YELLOW}{suspicious} suspicious{_RESET} · "
         f"{_GREEN}{clean} clean{_RESET} · {_DIM}{len(dossiers)} total{_RESET}"
+    )
+    lines.append(
+        f"{_DIM}detonated {detonated_count}/{len(dossiers)} "
+        f"({skipped_count} skipped — established packages or detonation disabled){_RESET}"
     )
     lines.append("")
 
@@ -42,6 +49,8 @@ def dossiers_to_terminal(dossiers: list[Dossier], target: str) -> str:
         verdict = compute_verdict(d.signals).value
         style, label = _VERDICT_STYLE[verdict]
         lines.append(f"{style}[{label}]{_RESET} {_BOLD}{d.package}@{d.version}{_RESET}")
+        if d.detonation_decision_reason:
+            lines.append(f"  {_DIM}detonation: {d.detonation_decision_reason}{_RESET}")
         for s in d.signals:
             lines.append(f"  {_CYAN}{s.category}{_RESET} {_DIM}({s.severity.value}, {s.source.value}){_RESET}")
             lines.append(f"    {_DIM}{s.description}{_RESET}")

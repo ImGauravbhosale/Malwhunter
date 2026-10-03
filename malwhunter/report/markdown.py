@@ -5,7 +5,16 @@ from malwhunter.dossier.verdict import compute_verdict
 
 
 def dossiers_to_markdown(dossiers: list[Dossier], target: str) -> str:
-    lines = [f"# MalwHunter Scan Report", "", f"**Target:** `{target}`", f"**Packages analyzed:** {len(dossiers)}", ""]
+    detonated_count = sum(1 for d in dossiers if d.detonated)
+    lines = [
+        f"# MalwHunter Scan Report",
+        "",
+        f"**Target:** `{target}`",
+        f"**Packages analyzed:** {len(dossiers)}",
+        f"**Detonated:** {detonated_count}/{len(dossiers)} "
+        f"({len(dossiers) - detonated_count} skipped — established packages or detonation disabled)",
+        "",
+    ]
 
     notable = [d for d in dossiers if compute_verdict(d.signals).value != "clean"]
     lines.append(f"**Notable:** {len(notable)} package(s) not clean")
@@ -19,6 +28,9 @@ def dossiers_to_markdown(dossiers: list[Dossier], target: str) -> str:
         verdict = compute_verdict(d.signals).value
         lines.append(f"## {d.package}@{d.version} — `{verdict.upper()}`")
         lines.append("")
+        if d.detonation_decision_reason:
+            lines.append(f"*Detonation: {d.detonation_decision_reason}*")
+            lines.append("")
         for s in d.signals:
             lines.append(f"- **[{s.source.value}] {s.category}** ({s.severity.value}): {s.description}")
             for e in s.evidence:

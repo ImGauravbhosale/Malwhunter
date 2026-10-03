@@ -53,6 +53,26 @@ two Analyst passes agreeing is enough. A single signal from just one
 source stays `suspicious`, not `malicious` — so one weak signal never
 blocks a real build.
 
+## Detonation is smart by default, not all-or-nothing
+
+Docker costs real wall-clock time per package. A typical `scan .` run has
+a handful of genuinely new dependencies and a long tail of established
+ones already installed by millions of people — Detonating left-pad buys
+nothing. By default, MalwHunter only pays Docker's cost on a package
+that's actually worth a closer look:
+
+- Recon already found a HIGH/CRITICAL signal → always detonate
+- Published more recently than 30 days ago → always detonate (too new to trust)
+- Fewer than 1,000 downloads/month → always detonate (too obscure to trust)
+- Reputation lookup itself failed → always detonate (fail open, not closed)
+- Otherwise → skip Detonation, and say exactly why in the report
+
+This is what makes `scan .` against a real `node_modules` tree practical
+to run as a CI gate instead of timing a pipeline out. Live-verified
+against the real npm registry: `inspect left-pad@1.3.0` correctly
+resolves real reputation data (8.5 years old, ~8.7M downloads/month) and
+skips Detonation; `--always-detonate` correctly overrides it.
+
 ## Quickstart
 
 ```bash
@@ -62,9 +82,13 @@ uv run malwhunter inspect left-pad@1.3.0
 
 ```bash
 malwhunter scan .                    # resolve your package.json/lockfile, hunt every dependency
-malwhunter scan . --no-detonate      # Recon + Analyst only — no Docker needed, much faster
+malwhunter scan . --no-detonate      # Recon + Analyst only — no Docker needed, fastest possible
+malwhunter scan . --always-detonate  # ignore the reputation pre-filter, detonate everything
 malwhunter inspect <name>@<version>  # deep-dive one package
 ```
+
+Tune the pre-filter with `--detonate-age-threshold` (days, default 30)
+and `--detonate-downloads-threshold` (default 1000).
 
 The Analyst's default backend is your own authenticated `claude` CLI
 session — no separate API key needed. Detonation needs Docker Desktop
@@ -77,16 +101,41 @@ Early, under active development.
 **Built and live-verified:** Recon's full catalog, real npm registry
 fetch with path-traversal-safe extraction, the Analyst's two-pass second
 opinion (proven live against a base64-encoded RCE payload regex alone
-can't decode), verdict combination, JSON/Markdown/terminal reporting.
+can't decode), verdict combination, JSON/Markdown/terminal reporting,
+the reputation-based smart Detonation pre-filter (proven live against
+the real npm registry).
 
-**Built, not yet live-verified:** the Detonation sandbox (`chamber/` +
-`wiretap/`). The recording proxy and canary mechanism are real and
-tested; the full container → proxy → tripwire chain hasn't been proven
-end-to-end yet because Docker Desktop wasn't running during development.
+**Detonation — two real bugs found and fixed by actually running it,
+one environment limitation still open:**
+- `node:20-slim` (the original sandbox base image) doesn't include
+  `curl` or `wget` at all — a `curl | sh` postinstall dropper, one of
+  the most common real malware patterns, silently no-ops before ever
+  reaching the network. Fixed: a purpose-built sandbox image
+  (`chamber/Dockerfile`) adds both, auto-built on first use.
+- Even with `curl` installed, it ignored the sandbox's proxy entirely —
+  `curl` only honors lowercase `http_proxy` for plain HTTP requests (its
+  documented httpoxy-era behavior), and the sandbox was only setting
+  uppercase `HTTP_PROXY`. Fixed: both cases are now set.
+- The signal-extraction logic also only checked HTTPS CONNECT traffic
+  against the host allow-list, never plain HTTP — meaning the exact
+  `curl | sh` pattern above would have gone undetected even once it
+  reached the network. Fixed, with dedicated tests.
+- **Still open:** the full container → host-proxy → tripwire chain
+  hasn't been proven inside an actual `docker run` yet. The proxy and
+  signal-generation logic are verified correct by testing them directly
+  in Python (the exact same code path, same request handling, same
+  canary-leak detection — just without the Docker hop), but the last
+  hop — a container on this specific development machine reaching back
+  to a process on the host via `host.docker.internal` — is blocked by a
+  machine-specific Docker Desktop networking issue, confirmed unrelated
+  to this project's code (ruled out: the sandbox, `--add-host`,
+  `--network host`, and the macOS firewall). Needs verifying on a
+  different machine or after further Docker Desktop network
+  troubleshooting.
 
 **Not started:** ecosystems beyond npm (PyPI's `setup.py` is a real but
 structurally different mechanism), full runtime instrumentation beyond
-install-lifecycle scripts, package reputation/history signals, a `watch`
+install-lifecycle scripts, user-configurable verdict policy, a `watch`
 mode for CI.
 
 ## Contributing
