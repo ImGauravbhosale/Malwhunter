@@ -111,6 +111,33 @@ GitHub-hosted runners already have Docker running, so Detonation works
 with zero extra setup — the smart pre-filter (on by default) is what
 keeps this fast enough to run on every PR instead of timing out.
 
+### Reviewed a finding and it's a false positive? `.MHignore` it
+
+`--fail-on` is all-or-nothing across the whole scan, so a single
+reviewed false positive shouldn't force you to turn off build-breaking
+entirely. Drop a `.MHignore` file in the scanned directory — modeled on
+Snyk's `.snyk` ignore policy, every rule requires a `reason` (no silent
+suppression) and an optional `expires` date, after which it stops
+applying on its own instead of being forgotten forever:
+
+```json
+[
+  {
+    "package": "left-pad",
+    "version": "1.3.0",
+    "reason": "Reviewed 2026-10-04 — bulk-env-enumeration signal is a false positive, confirmed benign by reading source",
+    "expires": "2027-01-01"
+  }
+]
+```
+
+Omit `version` to match the package at any version. Ignored packages
+are excluded from the `--fail-on` gate but still show up in the report
+under their own `IGNORED` section with the reason attached — nothing
+disappears silently. Stale rules (never matched a scanned package) and
+expired rules are both flagged as warnings on stderr so they don't rot
+unnoticed.
+
 ## Status
 
 Early, under active development.

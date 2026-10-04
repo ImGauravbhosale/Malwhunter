@@ -11,6 +11,7 @@ from malwhunter.analyst.session import Analyst
 from malwhunter.chamber.trust import DEFAULT_AGE_THRESHOLD_DAYS, DEFAULT_DOWNLOADS_THRESHOLD, decide_detonation
 from malwhunter.dossier.model import Dossier
 from malwhunter.dossier.verdict import compute_verdict
+from malwhunter.intake.ignore import IgnoreFileError, apply_ignore_rules, load_ignore_rules
 from malwhunter.intake.manifest import resolve_dependencies
 from malwhunter.intake.registry import PackageFetchError, extract_tarball, fetch_package_reputation, fetch_tarball
 from malwhunter.recon.scanner import run_recon
@@ -115,7 +116,7 @@ def _render_and_exit(
     else:
         click.echo(f"Wrote {output_format} report with {len(dossiers)} package(s) to {out_path}")
 
-    verdicts = [compute_verdict(d.signals).value for d in dossiers]
+    verdicts = [compute_verdict(d.signals).value for d in dossiers if not d.ignored]
     qualifies = False
     if fail_on == "malicious":
         qualifies = "malicious" in verdicts
@@ -210,6 +211,12 @@ def scan(
         click.echo(f"malwhunter: error: {exc}", err=True)
         sys.exit(EXIT_ERROR)
 
+    try:
+        ignore_rules = load_ignore_rules(project_dir)
+    except IgnoreFileError as exc:
+        click.echo(f"malwhunter: error: {exc}", err=True)
+        sys.exit(EXIT_ERROR)
+
     if not deps:
         click.echo("malwhunter: no dependencies found (no package.json/package-lock.json?)", err=True)
 
@@ -230,6 +237,32 @@ def scan(
                     downloads_threshold=detonate_downloads_threshold,
                     analyst=analyst,
                 )
+            )
+
+    if ignore_rules:
+        outcome = apply_ignore_rules(dossiers, ignore_rules)
+        for d in dossiers:
+            rule = outcome.matched.get(d.dossier_key)
+            if rule:
+                d.ignored = True
+                d.ignore_reason = rule.reason
+        if outcome.matched:
+            click.echo(
+                f"malwhunter: {len(outcome.matched)} package(s) excluded from --fail-on via .MHignore "
+                f"(still shown in the report)",
+                err=True,
+            )
+        for rule in outcome.expired:
+            click.echo(
+                f"malwhunter: warning: .MHignore rule for {rule.package}"
+                f"{'@' + rule.version if rule.version else ''} expired {rule.expires} — no longer applied, remove or renew it",
+                err=True,
+            )
+        for rule in outcome.unused:
+            click.echo(
+                f"malwhunter: warning: .MHignore rule for {rule.package}"
+                f"{'@' + rule.version if rule.version else ''} never matched a scanned package — stale entry?",
+                err=True,
             )
 
     _render_and_exit(dossiers, str(project_dir), output_format, out_path, fail_on)
