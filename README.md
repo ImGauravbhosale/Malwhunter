@@ -1,4 +1,11 @@
-# MalwHunter
+<p align="center">
+  <a href="assets/logo.png">
+    <img src="assets/logo.png" alt="MalwHunter — hunting malware in npm dependencies" width="800">
+  </a>
+</p>
+
+> Traditional SCA asks: "Is this dependency already known to be vulnerable or malicious?"
+> MalwHunter asks: "What does this dependency actually do before we trust it?"
 
 [![CI](https://img.shields.io/github/actions/workflow/status/ImGauravbhosale/Malwhunter/ci.yml?branch=main&label=CI)](https://github.com/ImGauravbhosale/Malwhunter/actions/workflows/ci.yml)
 [![Security Scan](https://img.shields.io/github/actions/workflow/status/ImGauravbhosale/Malwhunter/security-scan.yml?branch=main&label=Security%20Scan)](https://github.com/ImGauravbhosale/Malwhunter/actions/workflows/security-scan.yml)
@@ -28,6 +35,21 @@ packages are versioned and shared, so a Dossier is cacheable across
 projects, not scoped to a single scan. A Dossier collects **Signals**
 (each carrying mandatory evidence — no signal without proof) and resolves
 to a **Verdict**: `clean` / `suspicious` / `malicious`.
+
+```mermaid
+flowchart TD
+    A["npm package@version"] --> B["Recon\n(static, no execution)"]
+    B --> C{"Ambiguous blob\nRecon can't resolve?"}
+    C -->|yes| D["Analyst\n(2 independent AI passes)"]
+    C -->|no| E
+    D --> E{"Smart pre-filter:\nnew, obscure, or\nalready HIGH+ flagged?"}
+    E -->|yes| F["Detonation\n(sandboxed Docker +\ncanary tripwires)"]
+    E -->|no| G["Verdict combination"]
+    F --> G
+    G --> H1["clean"]
+    G --> H2["suspicious"]
+    G --> H3["malicious"]
+```
 
 1. **Recon** (deterministic) — unpacks the tarball and inspects it
    without executing anything: install-lifecycle script abuse
