@@ -98,7 +98,15 @@ class _ProxyThread:
             loop = asyncio.new_event_loop()
             self._loop = loop
             asyncio.set_event_loop(loop)
-            self.port = loop.run_until_complete(self.proxy.start())
+            # 0.0.0.0, not 127.0.0.1: Docker Desktop's VM networking
+            # specially routes host.docker.internal to loopback-bound
+            # host services, but native Linux Docker (e.g. GitHub Actions
+            # runners) maps it to the actual bridge gateway IP instead —
+            # a socket bound to 127.0.0.1 only isn't reachable from there.
+            # Bound to an OS-assigned ephemeral port (port=0), one-shot
+            # per Detonation run, torn down immediately after — not a
+            # standing exposed service.
+            self.port = loop.run_until_complete(self.proxy.start(host="0.0.0.0"))  # nosec B104
             self._ready.set()
             loop.run_forever()
 
