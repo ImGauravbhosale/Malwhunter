@@ -31,7 +31,7 @@ _BANNER_STYLE = {
     "clean": (_BG_GREEN, _BLACK, "ALL PACKAGES CLEAN"),
 }
 
-_MIN_WIDTH = 48
+_MIN_WIDTH = 60  # must fit the 59-col "MALWHUNTER" block-letter banner
 _MAX_WIDTH = 100
 
 
@@ -50,6 +50,68 @@ def _bar(text: str, width: int, bg: str, fg: str) -> str:
     left = pad // 2
     right = pad - left
     return f"{bg}{fg}{_BOLD}{' ' * left}{text}{' ' * right}{_RESET}"
+
+
+# 5-row block-letter font, hand-drawn — only the letters MalwHunter's own
+# name needs. Each glyph is a fixed 5-wide x 5-tall grid of █/space.
+_GLYPHS = {
+    "M": ["█   █", "██ ██", "█ █ █", "█   █", "█   █"],
+    "A": [" ███ ", "█   █", "█████", "█   █", "█   █"],
+    "L": ["█    ", "█    ", "█    ", "█    ", "█████"],
+    "W": ["█   █", "█   █", "█ █ █", "██ ██", "█   █"],
+    "H": ["█   █", "█   █", "█████", "█   █", "█   █"],
+    "U": ["█   █", "█   █", "█   █", "█   █", " ███ "],
+    "N": ["█   █", "██  █", "█ █ █", "█  ██", "█   █"],
+    "T": ["█████", "  █  ", "  █  ", "  █  ", "  █  "],
+    "E": ["█████", "█    ", "████ ", "█    ", "█████"],
+    "R": ["████ ", "█   █", "████ ", "█ █  ", "█  █ "],
+    " ": ["   ", "   ", "   ", "   ", "   "],
+}
+
+
+def _big_text(word: str, color: str, width: int) -> list[str]:
+    rows = ["".join(_GLYPHS[ch][r] + " " for ch in word.upper()).rstrip() for r in range(5)]
+    text_width = max(len(r) for r in rows)
+    pad = max((width - text_width) // 2, 0)
+    return [f"{' ' * pad}{color}{_BOLD}{r}{_RESET}" for r in rows]
+
+
+def startup_banner(target: str) -> str:
+    """Printed before analysis starts — the verdict isn't known yet, so this
+    is a neutral brand banner, distinct from the colored verdict banner
+    `dossiers_to_terminal` prints once results are in."""
+    width = _width()
+    lines = [
+        _rule("═", width, _CYAN),
+        "",
+        *_big_text("MALWHUNTER", _CYAN, width),
+        "",
+        f"{' ' * max((width - len('npm supply-chain scanner')) // 2, 0)}{_DIM}npm supply-chain scanner{_RESET}",
+        "",
+        f"{_DIM}scanning{_RESET} {target}",
+        _rule("═", width, _CYAN),
+    ]
+    return "\n".join(lines)
+
+
+def analyzing_line(name: str, version: str) -> str:
+    return f"{_DIM}▸ Analyzing{_RESET} {_BOLD}{name}@{version}{_RESET}..."
+
+
+def done_line(name: str, version: str) -> str:
+    return f"{_GREEN}✓ Done{_RESET}      {_BOLD}{name}@{version}{_RESET}"
+
+
+def _clean_section(clean: list[Dossier], width: int) -> list[str]:
+    lines = [
+        _rule("─", width),
+        f"{_GREEN}{_BOLD}CLEAN{_RESET}  {_DIM}({len(clean)} package(s)){_RESET}",
+        _rule("─", width),
+        "",
+    ]
+    for d in clean:
+        lines.append(f"  {_GREEN}✓{_RESET} {d.package}@{d.version}")
+    return lines
 
 
 def _ignored_section(ignored: list[Dossier], width: int) -> list[str]:
@@ -104,12 +166,16 @@ def dossiers_to_terminal(dossiers: list[Dossier], target: str) -> str:
     lines.append("")
 
     notable = [d for d in active if compute_verdict(d.signals).value != "clean"]
+    clean_pkgs = [d for d in active if compute_verdict(d.signals).value == "clean"]
     if not notable:
         lines.append(_rule("─", width))
         lines.append(f"  {_GREEN}{_BOLD}✓ Nothing suspicious found.{_RESET}")
         if ignored:
             lines.append("")
             lines.extend(_ignored_section(ignored, width))
+        if clean_pkgs:
+            lines.append("")
+            lines.extend(_clean_section(clean_pkgs, width))
         return "\n".join(lines)
 
     lines.append(_rule("─", width))
@@ -119,27 +185,37 @@ def dossiers_to_terminal(dossiers: list[Dossier], target: str) -> str:
 
     for i, d in enumerate(notable):
         verdict = compute_verdict(d.signals).value
-        style, label = _VERDICT_STYLE[verdict]
-        lines.append(f"{style}[{label}]{_RESET} {_BOLD}{d.package}@{d.version}{_RESET}")
+        bg, fg, _ = _BANNER_STYLE[verdict]
+        lines.append("")
+        lines.append(_bar(f"[{verdict.upper()}]  {d.package}@{d.version}", width, bg, fg))
         if d.detonation_decision_reason:
             lines.append(f"  {_DIM}↳ detonation: {d.detonation_decision_reason}{_RESET}")
-        for s in d.signals:
-            lines.append(f"  {_CYAN}●{_RESET} {_CYAN}{s.category}{_RESET} {_DIM}({s.severity.value}, {s.source.value}){_RESET}")
-            lines.append(f"      {_DIM}{s.description}{_RESET}")
+        lines.append("")
+        for j, s in enumerate(d.signals, 1):
+            lines.append(f"  {_BOLD}{j}. {s.description}{_RESET}")
+            lines.append(
+                f"     {_DIM}technical: {s.category} · {s.severity.value} severity · "
+                f"detected by {s.source.value}{_RESET}"
+            )
             for e in s.evidence:
                 loc = f"{e.file}:{e.line}" if e.file and e.line else (e.file or e.detail or "")
+                pkg_tag = f"{_DIM} (in {d.package}@{d.version}){_RESET}"
                 if loc:
-                    lines.append(f"      {_DIM}{loc}{_RESET}  {e.excerpt}")
+                    lines.append(f"     {_CYAN}{loc}{_RESET}{pkg_tag}  {e.excerpt}")
                 else:
-                    lines.append(f"      {e.excerpt}")
+                    lines.append(f"     {e.excerpt}{pkg_tag}")
+            if j < len(d.signals):
+                lines.append("")
         if i < len(notable) - 1:
             lines.append("")
             lines.append(_rule("·", width))
-            lines.append("")
-        else:
-            lines.append("")
+    lines.append("")
 
     if ignored:
         lines.extend(_ignored_section(ignored, width))
+        lines.append("")
+
+    if clean_pkgs:
+        lines.extend(_clean_section(clean_pkgs, width))
 
     return "\n".join(lines)

@@ -9,6 +9,7 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/ImGauravbhosale/Malwhunter/ci.yml?branch=main&label=CI)](https://github.com/ImGauravbhosale/Malwhunter/actions/workflows/ci.yml)
 [![Security Scan](https://img.shields.io/github/actions/workflow/status/ImGauravbhosale/Malwhunter/security-scan.yml?branch=main&label=Security%20Scan)](https://github.com/ImGauravbhosale/Malwhunter/actions/workflows/security-scan.yml)
+[![Lint](https://github.com/ImGauravbhosale/Malwhunter/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/ImGauravbhosale/Malwhunter/actions/workflows/lint.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ImGauravbhosale/Malwhunter/badge)](https://scorecard.dev/viewer/?uri=github.com/ImGauravbhosale/Malwhunter)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/github/license/ImGauravbhosale/Malwhunter)](LICENSE)
@@ -177,8 +178,8 @@ can't decode), verdict combination, JSON/Markdown/terminal reporting,
 the reputation-based smart Detonation pre-filter (proven live against
 the real npm registry).
 
-**Detonation — two real bugs found and fixed by actually running it,
-one environment limitation still open:**
+**Detonation — fully proven end-to-end, three real bugs found and fixed
+by actually running it:**
 - `node:20-slim` (the original sandbox base image) doesn't include
   `curl` or `wget` at all — a `curl | sh` postinstall dropper, one of
   the most common real malware patterns, silently no-ops before ever
@@ -192,18 +193,22 @@ one environment limitation still open:**
   against the host allow-list, never plain HTTP — meaning the exact
   `curl | sh` pattern above would have gone undetected even once it
   reached the network. Fixed, with dedicated tests.
-- **Still open:** the full container → host-proxy → tripwire chain
-  hasn't been proven inside an actual `docker run` yet. The proxy and
-  signal-generation logic are verified correct by testing them directly
-  in Python (the exact same code path, same request handling, same
-  canary-leak detection — just without the Docker hop), but the last
-  hop — a container on this specific development machine reaching back
-  to a process on the host via `host.docker.internal` — is blocked by a
-  machine-specific Docker Desktop networking issue, confirmed unrelated
-  to this project's code (ruled out: the sandbox, `--add-host`,
-  `--network host`, and the macOS firewall). Needs verifying on a
-  different machine or after further Docker Desktop network
-  troubleshooting.
+- The full container → host-proxy → tripwire chain is now verified
+  working end-to-end: a real Docker container running a real
+  `postinstall` script that actually `curl`s a planted canary secret to
+  an unrecognized host, caught by the real `WiretapProxy` on the host —
+  not mocked, not simulated. A previously-suspected machine-specific
+  Docker Desktop networking issue blocking the `host.docker.internal`
+  hop turned out not to be reproducible anymore (Docker Desktop update
+  since, most likely). Covered by a real (non-mocked) integration test,
+  `test_detonate_package_catches_real_canary_exfiltration_end_to_end` in
+  `tests/test_chamber_runner.py`, which skips gracefully if Docker isn't
+  available rather than failing CI.
+- One real bug this surfaced: the proxy's shutdown didn't cancel
+  still-in-flight request-handling tasks before stopping the event loop,
+  which asyncio reported as `Task was destroyed but it is pending!`.
+  Fixed: `WiretapProxy.stop()` now cancels and awaits any pending tasks
+  before returning.
 
 **Not started:** ecosystems beyond npm (PyPI's `setup.py` is a real but
 structurally different mechanism), full runtime instrumentation beyond

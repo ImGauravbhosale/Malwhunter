@@ -1,4 +1,4 @@
-name: CI
+name: Lint
 
 on:
   push:
@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -20,4 +20,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync
-      - run: uv run pytest -q
+      - run: uv run ruff check .

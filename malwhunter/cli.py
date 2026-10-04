@@ -26,7 +26,7 @@ from malwhunter.intake.registry import (
 from malwhunter.recon.scanner import run_recon
 from malwhunter.report.json_report import dossiers_to_json_str, write_json_report
 from malwhunter.report.markdown import dossiers_to_markdown, write_markdown_report
-from malwhunter.report.terminal import dossiers_to_terminal
+from malwhunter.report.terminal import analyzing_line, done_line, dossiers_to_terminal, startup_banner
 
 EXIT_OK = 0
 EXIT_FINDINGS = 1
@@ -123,7 +123,14 @@ def _render_and_exit(
     if not out_path:
         click.echo(rendered, color=(output_format == "terminal") or None)
     else:
-        click.echo(f"Wrote {output_format} report with {len(dossiers)} package(s) to {out_path}")
+        # Writing to a file shouldn't mean the CLI goes quiet — show the
+        # human-readable view here too, the file write is in addition to
+        # that, not instead of it.
+        if output_format != "terminal":
+            click.echo(dossiers_to_terminal(dossiers, target), color=True)
+        else:
+            click.echo(rendered, color=True)
+        click.echo(f"\nWrote {output_format} report with {len(dossiers)} package(s) to {out_path}")
 
     verdicts = [compute_verdict(d.signals).value for d in dossiers if not d.ignored]
     qualifies = False
@@ -214,6 +221,7 @@ def scan(
 ) -> None:
     """Resolve PATH's npm dependencies and hunt for malware in each one."""
     project_dir = Path(path)
+    click.echo(startup_banner(str(project_dir)), err=True)
     try:
         deps = resolve_dependencies(project_dir)
     except Exception as exc:  # tool/config error — distinct from "findings present"
@@ -235,7 +243,7 @@ def scan(
     with tempfile.TemporaryDirectory(prefix="malwhunter-") as tmp:
         workdir = Path(tmp)
         for dep in deps:
-            click.echo(f"analyzing {dep.name}@{dep.version}...", err=True)
+            click.echo(analyzing_line(dep.name, dep.version), err=True)
             dossiers.append(
                 _analyze_package(
                     dep.name,
@@ -247,6 +255,7 @@ def scan(
                     analyst=analyst,
                 )
             )
+            click.echo(done_line(dep.name, dep.version), err=True)
 
     if ignore_rules:
         outcome = apply_ignore_rules(dossiers, ignore_rules)
@@ -292,6 +301,7 @@ def inspect(
     ai: bool,
 ) -> None:
     """Deep-dive a single package, e.g. `malwhunter inspect left-pad@1.3.0`."""
+    click.echo(startup_banner(spec), err=True)
     if "@" not in spec.lstrip("@"):
         click.echo("malwhunter: error: expected NAME@VERSION (e.g. left-pad@1.3.0)", err=True)
         sys.exit(EXIT_ERROR)
@@ -299,6 +309,7 @@ def inspect(
 
     detonate_mode = _resolve_detonate_mode(no_detonate, always_detonate)
     analyst = _select_analyst(ai)
+    click.echo(analyzing_line(name, version), err=True)
     with tempfile.TemporaryDirectory(prefix="malwhunter-") as tmp:
         dossier = _analyze_package(
             name,
@@ -309,6 +320,7 @@ def inspect(
             downloads_threshold=detonate_downloads_threshold,
             analyst=analyst,
         )
+    click.echo(done_line(name, version), err=True)
 
     _render_and_exit([dossier], f"{name}@{version}", output_format, None, "malicious")
 

