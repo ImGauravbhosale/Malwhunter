@@ -45,7 +45,7 @@ runs:
   using: "composite"
   steps:
     - name: Install uv
-      uses: astral-sh/setup-uv@v3
+      uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
       with:
         python-version: "3.12"
 
@@ -58,6 +58,12 @@ runs:
       id: scan
       shell: bash
       working-directory: ${{ github.action_path }}
+      env:
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_AI: ${{ inputs.ai }}
+        INPUT_DETONATE: ${{ inputs.detonate }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_FORMAT: ${{ inputs.format }}
       run: |
         set +e
 
@@ -65,36 +71,42 @@ runs:
         # ($GITHUB_WORKSPACE), never this action's own installed
         # location — github.action_path is only where MalwHunter itself
         # lives, not what it should scan.
-        if [ -z "${{ inputs.path }}" ]; then
+        #
+        # Inputs are read from env vars (set above), not interpolated
+        # directly into this script via ${{ }} — template substitution
+        # happens before the shell ever sees the script, so an input
+        # containing shell metacharacters could otherwise inject
+        # arbitrary commands.
+        if [ -z "$INPUT_PATH" ]; then
           SCAN_PATH="$GITHUB_WORKSPACE"
         else
-          SCAN_PATH="$GITHUB_WORKSPACE/${{ inputs.path }}"
+          SCAN_PATH="$GITHUB_WORKSPACE/$INPUT_PATH"
         fi
 
         AI_FLAG="--no-ai"
-        if [ "${{ inputs.ai }}" = "true" ]; then AI_FLAG="--ai"; fi
+        if [ "$INPUT_AI" = "true" ]; then AI_FLAG="--ai"; fi
 
         DETONATE_FLAG=""
-        if [ "${{ inputs.detonate }}" = "never" ]; then DETONATE_FLAG="--no-detonate"; fi
-        if [ "${{ inputs.detonate }}" = "always" ]; then DETONATE_FLAG="--always-detonate"; fi
+        if [ "$INPUT_DETONATE" = "never" ]; then DETONATE_FLAG="--no-detonate"; fi
+        if [ "$INPUT_DETONATE" = "always" ]; then DETONATE_FLAG="--always-detonate"; fi
 
-        REPORT="$RUNNER_TEMP/malwhunter-report.${{ inputs.format }}"
+        REPORT="$RUNNER_TEMP/malwhunter-report.$INPUT_FORMAT"
 
         uv run malwhunter scan "$SCAN_PATH" \
           $AI_FLAG \
           $DETONATE_FLAG \
-          --fail-on "${{ inputs.fail-on }}" \
-          --format "${{ inputs.format }}" \
+          --fail-on "$INPUT_FAIL_ON" \
+          --format "$INPUT_FORMAT" \
           --out "$REPORT"
         CODE=$?
 
         echo "report-path=$REPORT" >> "$GITHUB_OUTPUT"
         if [ $CODE -eq 0 ]; then
-          echo "verdict-summary=no findings at or above '${{ inputs.fail-on }}'" >> "$GITHUB_OUTPUT"
-          echo "::notice::MalwHunter: no findings at or above '${{ inputs.fail-on }}'"
+          echo "verdict-summary=no findings at or above '$INPUT_FAIL_ON'" >> "$GITHUB_OUTPUT"
+          echo "::notice::MalwHunter: no findings at or above '$INPUT_FAIL_ON'"
         else
-          echo "verdict-summary=findings at or above '${{ inputs.fail-on }}' — see the report" >> "$GITHUB_OUTPUT"
-          echo "::error::MalwHunter found a dependency at or above '${{ inputs.fail-on }}' — see $REPORT"
+          echo "verdict-summary=findings at or above '$INPUT_FAIL_ON' — see the report" >> "$GITHUB_OUTPUT"
+          echo "::error::MalwHunter found a dependency at or above '$INPUT_FAIL_ON' — see $REPORT"
         fi
 
         exit $CODE

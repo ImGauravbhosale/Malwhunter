@@ -47,6 +47,18 @@ class WiretapProxy:
             self._server.close()
             await self._server.wait_closed()
 
+        # Closing the server only stops new connections — any in-flight
+        # _handle_client/pump tasks (e.g. a response still being written
+        # back as the container tears down) keep running otherwise, and
+        # get silently destroyed mid-flight once the event loop stops,
+        # which asyncio reports as "Task was destroyed but it is pending!"
+        current = asyncio.current_task()
+        pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             first_line = await reader.readline()
