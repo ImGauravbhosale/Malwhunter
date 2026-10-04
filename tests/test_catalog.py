@@ -1,4 +1,3 @@
-import re
 
 from malwhunter.recon.catalog import (
     BULK_ENV_ENUMERATION,

@@ -9,6 +9,7 @@ from malwhunter.intake.registry import (
     PackageFetchError,
     extract_tarball,
     fetch_package_metadata,
+    fetch_package_reputation,
     fetch_tarball,
 )
 
@@ -70,9 +71,6 @@ def test_extract_tarball_refuses_path_traversal(tmp_path: Path):
 
     # Whatever happened, nothing must have escaped the destination directory.
     assert not (tmp_path / "evil.sh").exists()
-
-
-from malwhunter.intake.registry import fetch_package_reputation
 
 
 def _mock_reputation_client(time_doc: dict | None, downloads_doc: dict | None, *, time_status=200, downloads_status=200) -> httpx.Client:

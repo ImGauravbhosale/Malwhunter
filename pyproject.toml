@@ -15,12 +15,30 @@ malwhunter = "malwhunter.cli:main"
 
 [dependency-groups]
 dev = [
+    "bandit>=1.9.4",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.0.0",
+    "ruff>=0.16.10",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = [
+    "E501",  # long descriptive strings (error messages, docstrings) are intentional here
+    "UP042", # str+Enum (not StrEnum) is deliberate for JSON-serializable .value access
+]
+
+[tool.bandit]
+skips = [
+    "B404", # subprocess is shelled out to by design (docker, claude) — flagged per-call-site instead
+]
 
 [build-system]
 requires = ["hatchling"]

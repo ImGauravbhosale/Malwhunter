@@ -8,7 +8,7 @@ from malwhunter.wiretap.proxy import WiretapProxy
 
 async def _run_echo_server() -> tuple[asyncio.base_events.Server, int]:
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        data = await reader.read(65536)
+        await reader.read(65536)
         body = b'{"ok": true}'
         response = (
             b"HTTP/1.1 200 OK\r\n"

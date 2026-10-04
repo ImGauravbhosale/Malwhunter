@@ -46,14 +46,16 @@ class DetonationUnavailable(Exception):
 
 def _docker_available() -> bool:
     try:
-        result = subprocess.run(["docker", "info"], capture_output=True, timeout=5)
+        # "docker" resolved via PATH, not attacker-influenced input; list form, no shell=True
+        result = subprocess.run(["docker", "info"], capture_output=True, timeout=5)  # nosec B603 B607
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False
 
 
 def _sandbox_image_exists() -> bool:
-    result = subprocess.run(
+    # "docker" resolved via PATH, not attacker-influenced input; list form, no shell=True
+    result = subprocess.run(  # nosec B603 B607
         ["docker", "image", "inspect", CONTAINER_IMAGE], capture_output=True, timeout=5
     )
     return result.returncode == 0
@@ -67,7 +69,8 @@ def _ensure_sandbox_image() -> None:
     caches the build, so this is a no-op after the first run."""
     if _sandbox_image_exists():
         return
-    result = subprocess.run(
+    # "docker" resolved via PATH, not attacker-influenced input; list form, no shell=True
+    result = subprocess.run(  # nosec B603 B607
         ["docker", "build", "-t", CONTAINER_IMAGE, str(_DOCKERFILE_DIR)],
         capture_output=True,
         timeout=120,
@@ -102,7 +105,8 @@ class _ProxyThread:
         self._thread = threading.Thread(target=run, daemon=True)
         self._thread.start()
         self._ready.wait(timeout=5)
-        assert self.port is not None
+        if self.port is None:
+            raise DetonationUnavailable("recording proxy didn't start within 5s")
         return self.port
 
     def stop(self) -> None:
@@ -135,7 +139,8 @@ def _build_docker_command(
     for key, value in canaries.items():
         cmd += ["-e", f"{key}={value}"]
     cmd += [
-        "--read-only", "--tmpfs", "/tmp",
+        # path *inside* the container, not a host temp dir
+        "--read-only", "--tmpfs", "/tmp",  # nosec B108
         "--cap-drop=ALL", "--security-opt=no-new-privileges",
         "--pids-limit=128", "--memory=256m", "--cpus=1",
         "-v", f"{scratch_path}:/pkg",
@@ -169,7 +174,9 @@ def detonate_package(name: str, version: str, package_dir: Path, package_json: d
 
         docker_cmd = _build_docker_command(scratch_path, proxy_port, canaries, script_chain)
         try:
-            subprocess.run(docker_cmd, capture_output=True, timeout=CONTAINER_TIMEOUT_SECONDS)
+            # list form, no shell=True; args are our own flags plus a scratch copy of the
+            # package under analysis — this *is* the sandboxed execution the tool exists to do
+            subprocess.run(docker_cmd, capture_output=True, timeout=CONTAINER_TIMEOUT_SECONDS)  # nosec B603
         except subprocess.TimeoutExpired:
             pass  # a slow install isn't itself a signal — only what it did during that time is
         finally:

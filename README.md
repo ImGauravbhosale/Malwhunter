@@ -1,5 +1,11 @@
 # MalwHunter
 
+[![CI](https://img.shields.io/github/actions/workflow/status/ImGauravbhosale/Malwhunter/ci.yml?branch=main&label=CI)](https://github.com/ImGauravbhosale/Malwhunter/actions/workflows/ci.yml)
+[![Security Scan](https://img.shields.io/github/actions/workflow/status/ImGauravbhosale/Malwhunter/security-scan.yml?branch=main&label=Security%20Scan)](https://github.com/ImGauravbhosale/Malwhunter/actions/workflows/security-scan.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/ImGauravbhosale/Malwhunter/badge)](https://scorecard.dev/viewer/?uri=github.com/ImGauravbhosale/Malwhunter)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/github/license/ImGauravbhosale/Malwhunter)](LICENSE)
+
 **MalwHunter** hunts for malware deliberately hidden inside your npm
 dependencies — the class of attack behind incidents like event-stream,
 ua-parser-js, coa/rc, colors.js, and node-ipc.
@@ -184,9 +190,12 @@ mode for CI.
 
 ## Contributing
 
-Issues and PRs welcome. See the docs site for the full architecture
+Issues and PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for dev
+setup and PR expectations, and the docs site for the full architecture
 writeup before proposing changes to the Dossier model or the Recon/
-Detonation/Analyst passes.
+Detonation/Analyst passes. This project follows the
+[Code of Conduct](CODE_OF_CONDUCT.md). Found a security issue? See
+[SECURITY.md](SECURITY.md) rather than opening a public issue.
 
 ## License
 

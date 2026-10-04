@@ -1,9 +1,8 @@
-from pathlib import Path
 
 import pytest
 
 from malwhunter.chamber.runner import DetonationUnavailable, _signals_from_capture, detonate_package
-from malwhunter.wiretap.proxy import CapturedConnect, CapturedHttpRequest, WiretapProxy
+from malwhunter.wiretap.proxy import CapturedConnect, CapturedHttpRequest
 
 
 def test_no_lifecycle_scripts_short_circuits_without_checking_docker(tmp_path, monkeypatch):

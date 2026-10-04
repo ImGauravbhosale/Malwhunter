@@ -83,7 +83,7 @@ class Signal:
 
 
 def signal_id(source: SignalSource, category: str, discriminator: str) -> str:
-    digest = hashlib.sha1(f"{source.value}:{category}:{discriminator}".encode("utf-8"))
+    digest = hashlib.sha1(f"{source.value}:{category}:{discriminator}".encode(), usedforsecurity=False)
     return digest.hexdigest()[:16]
 
 

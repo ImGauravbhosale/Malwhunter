@@ -7,7 +7,7 @@ from malwhunter.dossier.verdict import compute_verdict
 def dossiers_to_markdown(dossiers: list[Dossier], target: str) -> str:
     detonated_count = sum(1 for d in dossiers if d.detonated)
     lines = [
-        f"# MalwHunter Scan Report",
+        "# MalwHunter Scan Report",
         "",
         f"**Target:** `{target}`",
         f"**Packages analyzed:** {len(dossiers)}",

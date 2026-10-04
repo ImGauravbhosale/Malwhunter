@@ -8,12 +8,21 @@ from pathlib import Path
 import click
 
 from malwhunter.analyst.session import Analyst
-from malwhunter.chamber.trust import DEFAULT_AGE_THRESHOLD_DAYS, DEFAULT_DOWNLOADS_THRESHOLD, decide_detonation
+from malwhunter.chamber.trust import (
+    DEFAULT_AGE_THRESHOLD_DAYS,
+    DEFAULT_DOWNLOADS_THRESHOLD,
+    decide_detonation,
+)
 from malwhunter.dossier.model import Dossier
 from malwhunter.dossier.verdict import compute_verdict
 from malwhunter.intake.ignore import IgnoreFileError, apply_ignore_rules, load_ignore_rules
 from malwhunter.intake.manifest import resolve_dependencies
-from malwhunter.intake.registry import PackageFetchError, extract_tarball, fetch_package_reputation, fetch_tarball
+from malwhunter.intake.registry import (
+    PackageFetchError,
+    extract_tarball,
+    fetch_package_reputation,
+    fetch_tarball,
+)
 from malwhunter.recon.scanner import run_recon
 from malwhunter.report.json_report import dossiers_to_json_str, write_json_report
 from malwhunter.report.markdown import dossiers_to_markdown, write_markdown_report

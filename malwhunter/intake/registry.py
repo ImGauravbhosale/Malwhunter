@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import tarfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -56,7 +56,7 @@ def _fetch_version_age_days(name: str, version: str, client: httpx.Client) -> in
         published = _parse_iso8601(published_at)
         if published is None:
             return None
-        return (datetime.now(timezone.utc) - published).days
+        return (datetime.now(UTC) - published).days
     except (httpx.HTTPError, ValueError, KeyError):
         return None
 

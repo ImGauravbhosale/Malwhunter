@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 
-from malwhunter.recon.scanner import run_recon
+from malwhunter.recon.catalog import COMMAND_EXEC_CALL
+from malwhunter.recon.scanner import _is_regexp_exec_false_positive, run_recon
 
 FIXTURES = Path(__file__).resolve().parent.parent / "examples" / "npm-fixtures"
 
@@ -49,10 +50,6 @@ def test_env_harvester_triggers_all_three_new_signals():
     assert "command-exec-computed-arg" in categories
     # and confirm the gap this fixture demonstrates:
     assert "lifecycle-script-abuse" not in categories
-
-
-from malwhunter.recon.scanner import _is_regexp_exec_false_positive
-from malwhunter.recon.catalog import COMMAND_EXEC_CALL
 
 
 def _match(line: str):

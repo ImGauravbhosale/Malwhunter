@@ -83,11 +83,11 @@ class WiretapProxy:
             )
             await self._forward_http(writer, method, target, headers, body)
         except (asyncio.IncompleteReadError, ConnectionResetError, ValueError, OSError):
-            pass
+            pass  # the sandboxed package disconnecting mid-request isn't itself a signal
         finally:
             try:
                 writer.close()
-            except Exception:
+            except Exception:  # best-effort close during cleanup, any failure here is moot  # nosec B110
                 pass
 
     async def _relay_connect(
@@ -112,11 +112,11 @@ class WiretapProxy:
                     dst.write(chunk)
                     await dst.drain()
             except (ConnectionResetError, asyncio.IncompleteReadError, OSError):
-                pass
+                pass  # either side closing mid-relay isn't itself a signal
             finally:
                 try:
                     dst.close()
-                except Exception:
+                except Exception:  # best-effort close during cleanup, any failure here is moot  # nosec B110
                     pass
 
         await asyncio.gather(pump(client_reader, remote_writer), pump(remote_reader, client_writer))
