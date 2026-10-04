@@ -16,6 +16,13 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+# How long to wait for the outbound connection to an install script's
+# target before giving up. Without this, a black-holed/unroutable
+# destination can hang far longer than a real connection failure would,
+# which then also delays shutdown since that stuck task has to be waited
+# on (or cancelled) before the proxy can stop.
+_CONNECT_TIMEOUT_SECONDS = 10
+
 
 @dataclass
 class CapturedHttpRequest:
@@ -106,8 +113,15 @@ class WiretapProxy:
         self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter, host: str, port: int
     ) -> None:
         try:
-            remote_reader, remote_writer = await asyncio.open_connection(host, port)
-        except OSError:
+            remote_reader, remote_writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=_CONNECT_TIMEOUT_SECONDS
+            )
+        except (OSError, TimeoutError):
+            # A black-holed/unroutable destination (e.g. a non-existent C2
+            # server) can otherwise hang here far longer than a real
+            # connection failure would — observed in practice connecting
+            # to a reserved test address from a different network than
+            # the one this was first verified on.
             client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
             await client_writer.drain()
             return
@@ -150,8 +164,10 @@ class WiretapProxy:
         port = int(port_str) if port_str.isdigit() else 80
 
         try:
-            remote_reader, remote_writer = await asyncio.open_connection(host, port)
-        except OSError:
+            remote_reader, remote_writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=_CONNECT_TIMEOUT_SECONDS
+            )
+        except (OSError, TimeoutError):
             client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
             await client_writer.drain()
             return
