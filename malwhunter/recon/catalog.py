@@ -46,12 +46,56 @@ NETWORK_PRIMITIVE = re.compile(
     r"""require\(['"]https?['"]\)|require\(['"]node-fetch['"]\)"""
 )
 
-# Discord webhooks and Telegram bot APIs are legitimate for an actual bot
-# package, but are an extremely well-documented exfiltration/C2 channel in
-# npm supply-chain malware (data posted to a webhook needs no C2
-# infrastructure of the attacker's own — it rides someone else's API).
+# Discord/Telegram/Slack webhooks, paste services, and generic "catch
+# whatever gets sent here" endpoints (webhook.site, requestbin) are all
+# legitimate for an actual bot/integration package, but are extremely
+# well-documented exfiltration/C2 channels in npm supply-chain malware —
+# posting stolen data to someone else's API needs no C2 infrastructure of
+# the attacker's own. A bare IP-literal URL or a .onion address is a
+# distinct, even stronger signal: real packages essentially never hardcode
+# a raw IP or a Tor hidden service as an endpoint.
 EXFIL_CHANNEL_PATTERN = re.compile(
-    r"discord(?:app)?\.com/api/webhooks/|api\.telegram\.org/bot", re.IGNORECASE
+    r"discord(?:app)?\.com/api/webhooks/|"
+    r"api\.telegram\.org/bot|"
+    r"hooks\.slack\.com/services/|"
+    r"(?:pastebin\.com/raw/|hastebin\.com/raw/|paste\.ee/r/)|"
+    r"(?:webhook\.site/|requestbin\.com/)|"
+    r"https?://(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?/|"
+    r"\.onion\b",
+    re.IGNORECASE,
+)
+
+# No legitimate dependency needs to publish or unpublish *itself* — this is
+# the signature of the self-replicating "worm" packages seen in real 2025
+# npm incidents, which modify the victim's own .npmrc auth token and then
+# run `npm publish` to spread to every package the victim maintains.
+NPM_SELF_PUBLISH_PATTERN = re.compile(r"\bnpm\s+(?:publish|unpublish)\b", re.IGNORECASE)
+NPMRC_TOKEN_TAMPERING = re.compile(
+    r"\.npmrc[^\n]{0,80}(_authToken|authToken)|(_authToken|authToken)[^\n]{0,80}\.npmrc",
+    re.IGNORECASE,
+)
+
+# Checking for a CI/sandbox environment is normal in plenty of legitimate
+# CLIs (skip interactive prompts, disable telemetry) — a bare check alone
+# would be noisy, the same mistake already found and fixed for exec(). Kept
+# deliberately separate from NETWORK_PRIMITIVE/COMMAND_EXEC_CALL so the
+# scanner can require both in the same file before treating it as evasion
+# (a package fingerprinting "am I being scanned?" and also phoning home or
+# shelling out is a much rarer, much stronger combination).
+CI_ENVIRONMENT_CHECK = re.compile(
+    r"process\.env\.(CI|GITHUB_ACTIONS|CONTINUOUS_INTEGRATION|TRAVIS|CIRCLECI|GITLAB_CI)\b"
+)
+
+# Reading one named env var is normal — SENSITIVE_READ's generic
+# process.env match is deliberately broad and only dangerous when paired
+# with network activity. This is the precise version: a small, well-known
+# list of secret-shaped variable names that a package has essentially no
+# legitimate reason to read by name.
+NAMED_CREDENTIAL_ENV_READ = re.compile(
+    r"process\.env\.(AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|"
+    r"GITHUB_TOKEN|GH_TOKEN|NPM_TOKEN|NPM_AUTH_TOKEN|STRIPE_SECRET_KEY|"
+    r"DATABASE_URL|PRIVATE_KEY|SSH_PRIVATE_KEY|SLACK_TOKEN|DOCKER_PASSWORD|"
+    r"DOCKERHUB_TOKEN|NGROK_AUTHTOKEN)\b"
 )
 
 PACKED_STRING_CANDIDATE = re.compile(r"""['"`]([A-Za-z0-9+/=_\-]{60,})['"`]""")

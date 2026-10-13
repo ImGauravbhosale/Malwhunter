@@ -11,10 +11,14 @@ from malwhunter.analyst.session import Analyst
 from malwhunter.dossier.model import Evidence, Severity, Signal, SignalSource, signal_id
 from malwhunter.recon.catalog import (
     BULK_ENV_ENUMERATION,
+    CI_ENVIRONMENT_CHECK,
     COMMAND_EXEC_CALL,
     EVAL_FAMILY_CALL,
     EXFIL_CHANNEL_PATTERN,
+    NAMED_CREDENTIAL_ENV_READ,
     NETWORK_PRIMITIVE,
+    NPM_SELF_PUBLISH_PATTERN,
+    NPMRC_TOKEN_TAMPERING,
     PACKED_STRING_CANDIDATE,
     SENSITIVE_READ,
     SHELL_ABUSE_PATTERN,
@@ -124,6 +128,7 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
 
     sensitive_evidence: Evidence | None = None
     network_evidence: Evidence | None = None
+    ci_check_evidence: Evidence | None = None
 
     for lineno, line in enumerate(lines, start=1):
         eval_match = EVAL_FAMILY_CALL.search(line)
@@ -163,10 +168,37 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
                     source=SignalSource.RECON,
                     category="known-exfil-channel",
                     severity=Severity.HIGH,
-                    description="references a Discord webhook or Telegram bot API endpoint — a common exfiltration channel in npm supply-chain malware",
+                    description="references a known exfiltration/C2 channel (webhook, paste service, bare IP, or .onion address) — rarely legitimate in a dependency",
                     evidence=[Evidence(excerpt=line.strip(), file=rel_path, line=lineno)],
                 )
             )
+
+        if NPM_SELF_PUBLISH_PATTERN.search(line) or NPMRC_TOKEN_TAMPERING.search(line):
+            signals.append(
+                Signal(
+                    id=signal_id(SignalSource.RECON, "npm-self-publish-behavior", f"{rel_path}:{lineno}"),
+                    source=SignalSource.RECON,
+                    category="npm-self-publish-behavior",
+                    severity=Severity.HIGH,
+                    description="invokes `npm publish`/`unpublish` or tampers with .npmrc auth tokens — the signature of self-replicating npm worm packages. Note: a handful of legitimate release-automation tools (semantic-release, np, lerna) do this by design — corroboration still required before treating as malicious",
+                    evidence=[Evidence(excerpt=line.strip(), file=rel_path, line=lineno)],
+                )
+            )
+
+        if NAMED_CREDENTIAL_ENV_READ.search(line):
+            signals.append(
+                Signal(
+                    id=signal_id(SignalSource.RECON, "named-credential-env-read", f"{rel_path}:{lineno}"),
+                    source=SignalSource.RECON,
+                    category="named-credential-env-read",
+                    severity=Severity.HIGH,
+                    description="reads a specific, well-known secret-shaped environment variable by name",
+                    evidence=[Evidence(excerpt=line.strip(), file=rel_path, line=lineno)],
+                )
+            )
+
+        if ci_check_evidence is None and CI_ENVIRONMENT_CHECK.search(line):
+            ci_check_evidence = Evidence(excerpt=line.strip(), file=rel_path, line=lineno)
 
         if BULK_ENV_ENUMERATION.search(line):
             signals.append(
@@ -215,6 +247,18 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
                 severity=Severity.HIGH,
                 description="reads sensitive data and has a network-capable call in the same file",
                 evidence=[sensitive_evidence, network_evidence],
+            )
+        )
+
+    if ci_check_evidence is not None and network_evidence is not None:
+        signals.append(
+            Signal(
+                id=signal_id(SignalSource.RECON, "ci-sandbox-evasion", rel_path),
+                source=SignalSource.RECON,
+                category="ci-sandbox-evasion",
+                severity=Severity.HIGH,
+                description="checks for a CI/sandbox environment and also has a network-capable call in the same file — a bare CI check alone is common and benign, but paired with network activity it matches malware that behaves differently under automated scanning",
+                evidence=[ci_check_evidence, network_evidence],
             )
         )
 
