@@ -20,6 +20,18 @@ ua-parser-js, coa/rc, colors.js, and node-ipc.
 
 Docs: https://imgauravbhosale.github.io/Malwhunter/
 
+## Run with Docker
+
+Start an interactive scanner without installing Python locally:
+
+```sh
+docker compose run --rm --build malwhunter
+```
+
+Enter an exact `package@version`, `/project` for the mounted project, or `q` to quit.
+The Docker launcher uses static Recon; AI review and detonation are not configured.
+See [Docker usage](DOCKER.md) for project mounts, direct commands, and reports.
+
 ## Why another supply-chain scanner
 
 Most existing tools (`npm audit`, Socket.dev, Snyk) are reactive — they
