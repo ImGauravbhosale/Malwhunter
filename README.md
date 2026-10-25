@@ -68,19 +68,30 @@ flowchart TD
 
 3. **Detonation** (dynamic, sandboxed — needs Docker) — runs the
    package's real install scripts inside a locked-down, single-use
-   container. All outbound traffic routes through a local recording
-   proxy instead of being cut off, so legitimate installs still complete
-   while every destination gets logged. **Canary tripwires** — fake
+   container. All outbound traffic routes through a recording proxy
+   instead of being cut off, so legitimate installs still complete
+   while every destination gets logged. The proxy is the *only* way out:
+   the sandbox sits on an isolated network with no internet route and no
+   host address on it, and the proxy (in its own container) refuses to
+   relay to localhost, private/LAN ranges, or cloud metadata endpoints —
+   an attempt to do so is itself an `internal-network-probe` signal. **Canary tripwires** — fake
    secrets with unique per-run values injected as env vars — mean that if
    a tripwire value is ever seen leaving the container, that's a
    near-zero-false-positive "this is actively exfiltrating" signal, with
    no pattern-matching involved at all.
 
 **Verdict combination** is deterministic: any canary exfiltration alone
-is enough; a static shape *and* an observed behavior agreeing is enough;
-two Analyst passes agreeing is enough. A single signal from just one
-source stays `suspicious`, not `malicious` — so one weak signal never
-blocks a real build.
+is enough; a strong (high-severity) static shape *and* an observed
+behavior agreeing is enough; two Analyst passes agreeing is enough. A
+single signal from just one source stays `suspicious`, not `malicious` —
+so one weak signal never blocks a real build, and two weak ones don't
+either.
+
+A package MalwHunter couldn't actually analyze — the tarball failed to
+download or extract, or there was no exact version to fetch because the
+project has no `package-lock.json` — is reported as `unscanned`, never
+`clean`. Any unscanned package makes `scan` exit `2` (incomplete), even
+with `--fail-on none`, unless `.MHignore` covers it.
 
 ## Detonation is smart by default, not all-or-nothing
 
@@ -120,8 +131,10 @@ Tune the pre-filter with `--detonate-age-threshold` (days, default 30)
 and `--detonate-downloads-threshold` (default 1000).
 
 The Analyst's default backend is your own authenticated `claude` CLI
-session — no separate API key needed. Detonation needs Docker Desktop
-running locally.
+session — no separate API key needed. Detonation needs Docker **28 or
+newer** running locally (for isolated-gateway networks); on an older
+Docker it refuses to run rather than run with the host exposed, and the
+scan continues with Recon only.
 
 ## Running in CI/CD
 
@@ -137,7 +150,7 @@ clone/install step needed in your own workflow:
 ```
 
 GitHub-hosted runners already have Docker running, so Detonation works
-with zero extra setup — the smart pre-filter (on by default) is what
+with zero extra setup (provided the runner image ships Docker 28+) — the smart pre-filter (on by default) is what
 keeps this fast enough to run on every PR instead of timing out.
 
 ### Reviewed a finding and it's a false positive? `.MHignore` it
