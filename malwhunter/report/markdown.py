@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from malwhunter.dossier.model import Dossier
-from malwhunter.dossier.verdict import compute_verdict
+from malwhunter.dossier.verdict import dossier_verdict
 
 
 def dossiers_to_markdown(dossiers: list[Dossier], target: str) -> str:
@@ -20,8 +20,8 @@ def dossiers_to_markdown(dossiers: list[Dossier], target: str) -> str:
         "",
     ]
 
-    notable = [d for d in active if compute_verdict(d.signals).value != "clean"]
-    clean_pkgs = [d for d in active if compute_verdict(d.signals).value == "clean"]
+    notable = [d for d in active if dossier_verdict(d).value != "clean"]
+    clean_pkgs = [d for d in active if dossier_verdict(d).value == "clean"]
     lines.append(f"**Notable:** {len(notable)} package(s) not clean")
     lines.append("")
 
@@ -36,9 +36,12 @@ def dossiers_to_markdown(dossiers: list[Dossier], target: str) -> str:
         return "\n".join(lines)
 
     for d in notable:
-        verdict = compute_verdict(d.signals).value
+        verdict = dossier_verdict(d).value
         lines.append(f"## {d.package}@{d.version} — `{verdict.upper()}`")
         lines.append("")
+        if d.scan_error:
+            lines.append(f"**Not scanned:** {d.scan_error}")
+            lines.append("")
         if d.detonation_decision_reason:
             lines.append(f"*Detonation: {d.detonation_decision_reason}*")
             lines.append("")
@@ -62,7 +65,7 @@ def dossiers_to_markdown(dossiers: list[Dossier], target: str) -> str:
 def _ignored_section(ignored: list[Dossier]) -> list[str]:
     lines = [f"## Ignored ({len(ignored)} via `.MHignore` — excluded from `--fail-on`)", ""]
     for d in ignored:
-        verdict = compute_verdict(d.signals).value
+        verdict = dossier_verdict(d).value
         lines.append(f"- **{d.package}@{d.version}** (`{verdict.upper()}`) — {d.ignore_reason}")
     lines.append("")
     return lines

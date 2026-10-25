@@ -32,6 +32,10 @@ class VerdictLevel(str, Enum):
     CLEAN = "clean"
     SUSPICIOUS = "suspicious"
     MALICIOUS = "malicious"
+    # The package was never actually analyzed (fetch/extract failed, or no
+    # exact version to fetch). Deliberately not CLEAN: "we didn't look" must
+    # never be reported the same way as "we looked and found nothing".
+    UNSCANNED = "unscanned"
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,7 @@ class Dossier:
     detonation_decision_reason: str | None = None
     ignored: bool = False
     ignore_reason: str | None = None
+    scan_error: str | None = None
 
     @property
     def dossier_key(self) -> str:
@@ -106,7 +111,7 @@ class Dossier:
         self.signals.append(signal)
 
     def to_dict(self) -> dict:
-        from malwhunter.dossier.verdict import compute_verdict
+        from malwhunter.dossier.verdict import dossier_verdict
 
         return {
             "package": self.package,
@@ -116,6 +121,7 @@ class Dossier:
             "detonation_decision_reason": self.detonation_decision_reason,
             "ignored": self.ignored,
             "ignore_reason": self.ignore_reason,
-            "verdict": compute_verdict(self.signals).value,
+            "scan_error": self.scan_error,
+            "verdict": dossier_verdict(self).value,
             "signals": [s.to_dict() for s in self.signals],
         }

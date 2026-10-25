@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
+import tarfile
 import tempfile
 from pathlib import Path
 
 import click
+import httpx
 
 from malwhunter.analyst.session import Analyst
 from malwhunter.chamber.trust import (
@@ -13,17 +16,17 @@ from malwhunter.chamber.trust import (
     DEFAULT_DOWNLOADS_THRESHOLD,
     decide_detonation,
 )
-from malwhunter.dossier.model import Dossier
-from malwhunter.dossier.verdict import compute_verdict
+from malwhunter.dossier.model import Dossier, VerdictLevel
+from malwhunter.dossier.verdict import dossier_verdict
 from malwhunter.intake.ignore import IgnoreFileError, apply_ignore_rules, load_ignore_rules
-from malwhunter.intake.manifest import resolve_dependencies
+from malwhunter.intake.manifest import get_lifecycle_scripts, resolve_dependencies
 from malwhunter.intake.registry import (
     PackageFetchError,
     extract_tarball,
     fetch_package_reputation,
     fetch_tarball,
 )
-from malwhunter.recon.scanner import run_recon
+from malwhunter.recon.scanner import drop_established_typosquats, run_recon
 from malwhunter.report.json_report import dossiers_to_json_str, write_json_report
 from malwhunter.report.markdown import dossiers_to_markdown, write_markdown_report
 from malwhunter.report.terminal import analyzing_line, done_line, dossiers_to_terminal, startup_banner
@@ -31,6 +34,12 @@ from malwhunter.report.terminal import analyzing_line, done_line, dossiers_to_te
 EXIT_OK = 0
 EXIT_FINDINGS = 1
 EXIT_ERROR = 2
+
+# An exact, registry-fetchable version. Anything else — "^1.2.0", "latest",
+# a git URL — comes from package.json's declared ranges (no lockfile), and
+# fetching it would either 404 or analyze a different version than the one
+# that actually gets installed.
+_EXACT_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 
 
 def _select_analyst(use_ai: bool) -> Analyst | None:
@@ -58,12 +67,22 @@ def _analyze_package(
     analyst: Analyst | None,
 ) -> Dossier:
     dossier = Dossier(package=name, version=version)
+    if not _EXACT_VERSION.match(version):
+        dossier.scan_error = (
+            f"{version!r} is not an exact version — commit a package-lock.json so the exact "
+            "installed version can be analyzed"
+        )
+        click.echo(f"malwhunter: warning: not scanned {name}@{version}: {dossier.scan_error}", err=True)
+        return dossier
     try:
         tarball_path = fetch_tarball(name, version, workdir)
         extract_dest = workdir / f"{name.replace('/', '__')}-{version}"
         package_dir = extract_tarball(tarball_path, extract_dest)
-    except PackageFetchError as exc:
-        click.echo(f"malwhunter: warning: could not fetch {name}@{version}: {exc}", err=True)
+    except (PackageFetchError, httpx.HTTPError, tarfile.TarError, OSError) as exc:
+        # Fail closed: a package we couldn't look at is UNSCANNED, never
+        # silently "clean" just because it produced no signals.
+        dossier.scan_error = f"could not fetch/extract: {exc}"
+        click.echo(f"malwhunter: warning: not scanned {name}@{version}: {exc}", err=True)
         return dossier
 
     package_json = {}
@@ -74,7 +93,15 @@ def _analyze_package(
         except json.JSONDecodeError:
             pass
 
-    for signal in run_recon(package_dir, name, package_json, analyst=analyst):
+    recon_signals = run_recon(package_dir, name, package_json, analyst=analyst)
+    # One reputation lookup, shared: smart mode needs it to gate Detonation,
+    # and a typosquat-candidate needs it to tell a squat from a package
+    # that's simply popular itself. Skipped when neither applies.
+    reputation = None
+    if detonate_mode == "smart" or any(s.category == "typosquat-candidate" for s in recon_signals):
+        reputation = fetch_package_reputation(name, version)
+        recon_signals = drop_established_typosquats(recon_signals, reputation.downloads_last_month)
+    for signal in recon_signals:
         dossier.add_signal(signal)
 
     if detonate_mode == "never":
@@ -83,14 +110,20 @@ def _analyze_package(
         if detonate_mode == "always":
             should_detonate, reason = True, "forced (--always-detonate)"
         else:  # "smart" — the default: cheap reputation lookup gates the expensive Docker pass
-            reputation = fetch_package_reputation(name, version)
             decision = decide_detonation(
                 reputation, dossier.signals, age_threshold_days=age_threshold_days, downloads_threshold=downloads_threshold
             )
             should_detonate, reason = decision.should_detonate, decision.reason
 
         dossier.detonation_decision_reason = reason
-        if should_detonate:
+        if should_detonate and not get_lifecycle_scripts(package_json):
+            # Detonation only executes install lifecycle scripts; with none,
+            # no container runs — reporting it as "detonated" would claim a
+            # behavioral check that never happened.
+            dossier.detonation_decision_reason = (
+                f"{reason} — but the package has no preinstall/install/postinstall script, so nothing ran"
+            )
+        elif should_detonate:
             from malwhunter.chamber.runner import DetonationUnavailable, detonate_package
 
             try:
@@ -98,6 +131,7 @@ def _analyze_package(
                     dossier.add_signal(signal)
                 dossier.detonated = True
             except DetonationUnavailable as exc:
+                dossier.detonation_decision_reason = f"{reason} — but detonation was unavailable: {exc}"
                 click.echo(f"malwhunter: detonation unavailable for {name}@{version}: {exc}", err=True)
 
     return dossier
@@ -132,14 +166,25 @@ def _render_and_exit(
             click.echo(rendered, color=True)
         click.echo(f"\nWrote {output_format} report with {len(dossiers)} package(s) to {out_path}")
 
-    verdicts = [compute_verdict(d.signals).value for d in dossiers if not d.ignored]
+    verdicts = [dossier_verdict(d) for d in dossiers if not d.ignored]
     qualifies = False
     if fail_on == "malicious":
-        qualifies = "malicious" in verdicts
+        qualifies = VerdictLevel.MALICIOUS in verdicts
     elif fail_on == "suspicious":
-        qualifies = any(v in ("malicious", "suspicious") for v in verdicts)
+        qualifies = any(v in (VerdictLevel.MALICIOUS, VerdictLevel.SUSPICIOUS) for v in verdicts)
 
-    sys.exit(EXIT_FINDINGS if qualifies else EXIT_OK)
+    if qualifies:
+        sys.exit(EXIT_FINDINGS)
+    unscanned = verdicts.count(VerdictLevel.UNSCANNED)
+    if unscanned:
+        # Not "findings", but not a pass either: the gate can't vouch for
+        # packages it never looked at. Applies even with --fail-on none.
+        click.echo(
+            f"malwhunter: error: {unscanned} package(s) could not be scanned — result is incomplete",
+            err=True,
+        )
+        sys.exit(EXIT_ERROR)
+    sys.exit(EXIT_OK)
 
 
 @click.group()

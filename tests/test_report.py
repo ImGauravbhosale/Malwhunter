@@ -57,3 +57,24 @@ def test_terminal_report_lists_clean_packages_in_their_own_section_last():
     assert "left-pad-utilz" in findings_section
     assert "sum-two-numbers" not in findings_section
     assert "sum-two-numbers" in out.split("CLEAN")[-1]
+
+
+def test_unscanned_package_is_never_reported_as_clean():
+    from malwhunter.dossier.model import Dossier
+    from malwhunter.report.markdown import dossiers_to_markdown
+    from malwhunter.report.terminal import dossiers_to_terminal
+
+    dossiers = [
+        Dossier(package="fine", version="1.0.0"),
+        Dossier(package="flaky", version="2.0.0", scan_error="could not fetch/extract: registry returned 503"),
+    ]
+    term = dossiers_to_terminal(dossiers, ".")
+    assert "ALL PACKAGES CLEAN" not in term
+    assert "SCAN INCOMPLETE" in term
+    assert "1 unscanned" in term
+    assert "not scanned: could not fetch/extract" in term
+
+    md = dossiers_to_markdown(dossiers, ".")
+    assert "No suspicious or malicious packages found." not in md
+    assert "## flaky@2.0.0 — `UNSCANNED`" in md
+    assert "**Not scanned:** could not fetch/extract" in md
