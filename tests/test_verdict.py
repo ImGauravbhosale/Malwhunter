@@ -59,3 +59,45 @@ def test_one_low_severity_analyst_signal_stays_suspicious():
         _signal(SignalSource.ANALYST, "obfuscated-intent", Severity.MEDIUM, "call2"),
     ]
     assert compute_verdict(signals).value == "suspicious"
+
+
+def test_weak_recon_plus_detonation_is_only_suspicious():
+    # Found by probing the old rule: a typosquat-distance false positive
+    # (vite -> vue) plus a binary download from an unlisted CDN — both
+    # MEDIUM, both common in normal packages — used to add up to MALICIOUS.
+    signals = [
+        _signal(SignalSource.RECON, "typosquat-candidate", Severity.MEDIUM),
+        _signal(SignalSource.DETONATION, "unexpected-network-destination", Severity.MEDIUM),
+    ]
+    assert compute_verdict(signals).value == "suspicious"
+
+
+def test_strong_recon_plus_any_detonation_is_malicious():
+    signals = [
+        _signal(SignalSource.RECON, "lifecycle-script-abuse", Severity.HIGH),
+        _signal(SignalSource.DETONATION, "unexpected-network-destination", Severity.MEDIUM),
+    ]
+    assert compute_verdict(signals).value == "malicious"
+
+
+def test_low_signals_alone_stay_clean():
+    signals = [_signal(SignalSource.RECON, "some-context", Severity.LOW)]
+    assert compute_verdict(signals).value == "clean"
+
+
+def test_unscanned_dossier_is_never_clean():
+    from malwhunter.dossier.model import Dossier
+    from malwhunter.dossier.verdict import dossier_verdict
+
+    dossier = Dossier(package="x", version="1.0.0", scan_error="registry returned 503")
+    assert dossier.signals == []
+    assert dossier_verdict(dossier).value == "unscanned"
+    assert dossier.to_dict()["verdict"] == "unscanned"
+    assert dossier.to_dict()["scan_error"] == "registry returned 503"
+
+
+def test_scanned_dossier_with_no_signals_is_clean():
+    from malwhunter.dossier.model import Dossier
+    from malwhunter.dossier.verdict import dossier_verdict
+
+    assert dossier_verdict(Dossier(package="x", version="1.0.0")).value == "clean"

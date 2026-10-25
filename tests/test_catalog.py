@@ -1,3 +1,4 @@
+import pytest
 
 from malwhunter.recon.catalog import (
     BULK_ENV_ENUMERATION,
@@ -8,6 +9,7 @@ from malwhunter.recon.catalog import (
     closest_typosquat_target,
     has_computed_arg,
     levenshtein,
+    osa_distance,
     shannon_entropy,
 )
 
@@ -102,3 +104,44 @@ def test_bulk_env_enumeration_matches_json_stringify():
 
 def test_bulk_env_enumeration_does_not_match_single_named_read():
     assert not BULK_ENV_ENUMERATION.search("const token = process.env.NPM_TOKEN")
+
+
+def test_osa_distance_counts_adjacent_swap_as_one_edit():
+    assert osa_distance("lodash", "lodahs") == 1
+    assert osa_distance("lodash", "loadsh") == 1
+    assert osa_distance("lodash", "lodash") == 0
+    assert osa_distance("vue", "vite") == 2
+
+
+@pytest.mark.parametrize(
+    "legit",
+    # every one of these was flagged by the old check (distance <= 2 on any length)
+    ["vite", "vuex", "color", "chai", "preact", "cors", "pug", "cypress", "yup"],
+)
+def test_real_packages_near_popular_names_are_not_typosquats(legit):
+    assert closest_typosquat_target(legit) is None
+
+
+@pytest.mark.parametrize(
+    "squat,target",
+    [
+        ("lodahs", "lodash"),        # adjacent swap
+        ("loadsh", "lodash"),        # adjacent swap
+        ("axioss", "axios"),         # doubled letter
+        ("expres", "express"),       # dropped letter
+        ("typescirpt", "typescript"),
+        ("crossenv", "cross-env"),   # separator dropped (real 2017 incident)
+        ("cross_env", "cross-env"),
+        ("cross-env.js", "cross-env"),  # .js dress-up
+        ("jqueryjs", "jquery"),
+        ("babelcli", "babel-cli"),   # real 2017 incident
+        ("LODASHH", "lodash"),       # case-insensitive
+    ],
+)
+def test_real_world_typosquat_shapes_are_caught(squat, target):
+    assert closest_typosquat_target(squat) == target
+
+
+def test_unrelated_js_suffixed_names_are_not_typosquats():
+    assert closest_typosquat_target("highlight.js") is None
+    assert closest_typosquat_target("chart.js") is None

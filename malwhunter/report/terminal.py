@@ -4,7 +4,7 @@ from __future__ import annotations
 import shutil
 
 from malwhunter.dossier.model import Dossier
-from malwhunter.dossier.verdict import compute_verdict
+from malwhunter.dossier.verdict import dossier_verdict
 
 _RESET = "\033[0m"
 _BOLD = "\033[1m"
@@ -18,17 +18,21 @@ _BLACK = "\033[30m"
 _BG_RED = "\033[41m"
 _BG_YELLOW = "\033[43m"
 _BG_GREEN = "\033[42m"
+_MAGENTA = "\033[35m"
+_BG_MAGENTA = "\033[45m"
 
 _VERDICT_STYLE = {
     "malicious": (_RED + _BOLD, "MALICIOUS"),
     "suspicious": (_YELLOW, "SUSPICIOUS"),
     "clean": (_GREEN, "CLEAN"),
+    "unscanned": (_MAGENTA, "UNSCANNED"),
 }
 
 _BANNER_STYLE = {
     "malicious": (_BG_RED, _WHITE, "MALICIOUS PACKAGES FOUND"),
     "suspicious": (_BG_YELLOW, _BLACK, "SUSPICIOUS PACKAGES FOUND"),
     "clean": (_BG_GREEN, _BLACK, "ALL PACKAGES CLEAN"),
+    "unscanned": (_BG_MAGENTA, _WHITE, "SCAN INCOMPLETE"),
 }
 
 _MIN_WIDTH = 60  # must fit the 59-col "MALWHUNTER" block-letter banner
@@ -122,7 +126,7 @@ def _ignored_section(ignored: list[Dossier], width: int) -> list[str]:
         "",
     ]
     for d in ignored:
-        verdict = compute_verdict(d.signals).value
+        verdict = dossier_verdict(d).value
         lines.append(f"{_DIM}[{verdict.upper()}, ignored]{_RESET} {_DIM}{_BOLD}{d.package}@{d.version}{_RESET}")
         lines.append(f"  {_DIM}reason: {d.ignore_reason}{_RESET}")
     return lines
@@ -135,15 +139,18 @@ def dossiers_to_terminal(dossiers: list[Dossier], target: str) -> str:
     active = [d for d in dossiers if not d.ignored]
     ignored = [d for d in dossiers if d.ignored]
 
-    verdicts = [compute_verdict(d.signals).value for d in active]
+    verdicts = [dossier_verdict(d).value for d in active]
     malicious = verdicts.count("malicious")
     suspicious = verdicts.count("suspicious")
     clean = verdicts.count("clean")
+    unscanned = verdicts.count("unscanned")
 
     detonated_count = sum(1 for d in dossiers if d.detonated)
     skipped_count = len(dossiers) - detonated_count
 
-    overall = "malicious" if malicious else "suspicious" if suspicious else "clean"
+    overall = (
+        "malicious" if malicious else "suspicious" if suspicious else "unscanned" if unscanned else "clean"
+    )
     bg, fg, status_text = _BANNER_STYLE[overall]
 
     # Banner
@@ -156,7 +163,8 @@ def dossiers_to_terminal(dossiers: list[Dossier], target: str) -> str:
         f"  {_RED}{_BOLD}{malicious} malicious{_RESET}   "
         f"{_YELLOW}{_BOLD}{suspicious} suspicious{_RESET}   "
         f"{_GREEN}{_BOLD}{clean} clean{_RESET}   "
-        f"{_DIM}{len(active)} total{_RESET}"
+        + (f"{_MAGENTA}{_BOLD}{unscanned} unscanned{_RESET}   " if unscanned else "")
+        + f"{_DIM}{len(active)} total{_RESET}"
         + (f"   {_DIM}({len(ignored)} ignored via .MHignore){_RESET}" if ignored else "")
     )
     lines.append(
@@ -165,8 +173,8 @@ def dossiers_to_terminal(dossiers: list[Dossier], target: str) -> str:
     )
     lines.append("")
 
-    notable = [d for d in active if compute_verdict(d.signals).value != "clean"]
-    clean_pkgs = [d for d in active if compute_verdict(d.signals).value == "clean"]
+    notable = [d for d in active if dossier_verdict(d).value != "clean"]
+    clean_pkgs = [d for d in active if dossier_verdict(d).value == "clean"]
     if not notable:
         lines.append(_rule("─", width))
         lines.append(f"  {_GREEN}{_BOLD}✓ Nothing suspicious found.{_RESET}")
@@ -184,10 +192,12 @@ def dossiers_to_terminal(dossiers: list[Dossier], target: str) -> str:
     lines.append("")
 
     for i, d in enumerate(notable):
-        verdict = compute_verdict(d.signals).value
+        verdict = dossier_verdict(d).value
         bg, fg, _ = _BANNER_STYLE[verdict]
         lines.append("")
         lines.append(_bar(f"[{verdict.upper()}]  {d.package}@{d.version}", width, bg, fg))
+        if d.scan_error:
+            lines.append(f"  {_MAGENTA}↳ not scanned: {d.scan_error}{_RESET}")
         if d.detonation_decision_reason:
             lines.append(f"  {_DIM}↳ detonation: {d.detonation_decision_reason}{_RESET}")
         lines.append("")

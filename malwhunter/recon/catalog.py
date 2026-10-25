@@ -107,7 +107,26 @@ POPULAR_PACKAGE_NAMES = (
     "lodash", "react", "express", "axios", "chalk", "request", "commander",
     "async", "underscore", "moment", "debug", "colors", "left-pad",
     "webpack", "babel-core", "eslint", "jquery", "vue", "typescript",
+    "cross-env", "babel-cli", "electron", "mongoose", "dotenv", "node-fetch",
 )
+
+# Real, widely-used packages that happen to sit one edit away from a name
+# above. Edit distance alone can't tell `vuex` (Vue's official store)
+# from a squat on `vue` — this is the offline fallback for that; online,
+# the package's own download count settles it (see
+# TYPOSQUAT_ESTABLISHED_DOWNLOADS). Found by benchmarking the check
+# against ~170 popular real package names.
+KNOWN_LEGIT_NEAR_NAMES = frozenset({"vuex", "preact", "color", "chai", "cors", "vite"})
+
+# A package with this many monthly downloads is established in its own
+# right — real typosquats live off mistyped installs and stay tiny.
+TYPOSQUAT_ESTABLISHED_DOWNLOADS = 100_000
+
+# "<popular>.js" / "<popular>-js" / "<popular>js" — dressing up a popular
+# name with a JS-ish suffix is a squat technique edit distance misses once
+# the suffix is long (`cross-env.js` is 3 edits from `cross-env`).
+_JS_SUFFIX = re.compile(r"[.\-_]?js$")
+_SEPARATORS = re.compile(r"[.\-_]")
 
 
 def has_computed_arg(call_match: re.Match) -> bool:
@@ -138,10 +157,41 @@ def levenshtein(a: str, b: str) -> int:
     return prev[-1]
 
 
-def closest_typosquat_target(package_name: str, max_distance: int = 2) -> str | None:
-    if package_name in POPULAR_PACKAGE_NAMES:
+def osa_distance(a: str, b: str) -> int:
+    """Edit distance where swapping two adjacent characters costs 1, not 2
+    (optimal string alignment) — `lodahs` is one slip of the fingers away
+    from `lodash`, and should score like one."""
+    if a == b:
+        return 0
+    rows = [list(range(len(b) + 1))]
+    for i, ca in enumerate(a, start=1):
+        row = [i] + [0] * len(b)
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            row[j] = min(rows[i - 1][j] + 1, row[j - 1] + 1, rows[i - 1][j - 1] + cost)
+            if i > 1 and j > 1 and ca == b[j - 2] and a[i - 2] == cb:
+                row[j] = min(row[j], rows[i - 2][j - 2] + 1)
+        rows.append(row)
+    return rows[-1][-1]
+
+
+def _max_typo_distance(popular: str) -> int:
+    # Two edits on a short name reaches far too much of the namespace:
+    # `pug`, `yup` and `vite` are all two edits from `vue`, `cypress` two
+    # from `express`. One edit is a typo; two only for longer names.
+    return 1 if len(popular) <= 8 else 2
+
+
+def closest_typosquat_target(package_name: str) -> str | None:
+    name = package_name.lower()
+    if name in POPULAR_PACKAGE_NAMES or name in KNOWN_LEGIT_NEAR_NAMES:
         return None
+    unsuffixed = _JS_SUFFIX.sub("", name)
     for popular in POPULAR_PACKAGE_NAMES:
-        if levenshtein(package_name, popular) <= max_distance:
+        if osa_distance(name, popular) <= _max_typo_distance(popular):
             return popular
+        if unsuffixed != name and unsuffixed == popular:
+            return popular
+        if _SEPARATORS.sub("", name) == _SEPARATORS.sub("", popular):
+            return popular  # crossenv / cross_env vs cross-env
     return None

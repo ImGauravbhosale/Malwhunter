@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from malwhunter.recon.catalog import COMMAND_EXEC_CALL
 from malwhunter.recon.scanner import _is_regexp_exec_false_positive, run_recon
 
@@ -229,3 +231,29 @@ def test_ci_check_with_network_call_is_flagged_as_evasion(tmp_path):
     )
     signals = run_recon(pkg_dir, "evasive-pkg", {"name": "evasive-pkg"})
     assert "ci-sandbox-evasion" in {s.category for s in signals}
+
+
+
+def _typosquat_and_other_signal():
+    from malwhunter.dossier.model import Evidence, Severity, Signal, SignalSource
+
+    ev = [Evidence(excerpt="x")]
+    return [
+        Signal("t", SignalSource.RECON, "typosquat-candidate", Severity.MEDIUM, "x", ev),
+        Signal("e", SignalSource.RECON, "eval-computed-arg", Severity.HIGH, "x", ev),
+    ]
+
+
+def test_heavily_downloaded_package_drops_only_its_typosquat_signal():
+    from malwhunter.recon.scanner import drop_established_typosquats
+
+    kept = drop_established_typosquats(_typosquat_and_other_signal(), downloads_last_month=5_000_000)
+    assert [s.category for s in kept] == ["eval-computed-arg"]
+
+
+@pytest.mark.parametrize("downloads", [None, 0, 40, 99_999])
+def test_obscure_or_unknown_package_keeps_typosquat_signal(downloads):
+    from malwhunter.recon.scanner import drop_established_typosquats
+
+    kept = drop_established_typosquats(_typosquat_and_other_signal(), downloads_last_month=downloads)
+    assert "typosquat-candidate" in [s.category for s in kept]

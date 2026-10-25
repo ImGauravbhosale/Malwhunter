@@ -104,6 +104,9 @@ runs:
         if [ $CODE -eq 0 ]; then
           echo "verdict-summary=no findings at or above '$INPUT_FAIL_ON'" >> "$GITHUB_OUTPUT"
           echo "::notice::MalwHunter: no findings at or above '$INPUT_FAIL_ON'"
+        elif [ $CODE -eq 2 ]; then
+          echo "verdict-summary=scan incomplete or failed — see the report" >> "$GITHUB_OUTPUT"
+          echo "::error::MalwHunter could not scan every dependency (or hit a config error) — see $REPORT"
         else
           echo "verdict-summary=findings at or above '$INPUT_FAIL_ON' — see the report" >> "$GITHUB_OUTPUT"
           echo "::error::MalwHunter found a dependency at or above '$INPUT_FAIL_ON' — see $REPORT"

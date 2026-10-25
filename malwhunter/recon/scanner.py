@@ -22,6 +22,7 @@ from malwhunter.recon.catalog import (
     PACKED_STRING_CANDIDATE,
     SENSITIVE_READ,
     SHELL_ABUSE_PATTERN,
+    TYPOSQUAT_ESTABLISHED_DOWNLOADS,
     closest_typosquat_target,
     has_computed_arg,
     shannon_entropy,
@@ -80,6 +81,17 @@ def scan_typosquat(package_name: str) -> list[Signal]:
             evidence=[Evidence(excerpt=package_name, detail=f"edit-distance to '{target}'")],
         )
     ]
+
+
+def drop_established_typosquats(signals: list[Signal], downloads_last_month: int | None) -> list[Signal]:
+    """Name distance alone can't tell a squat from a real package that just
+    has a similar name — `preact` is one edit from `react`. A package that
+    is itself heavily downloaded isn't living off mistyped installs, so its
+    typosquat signal is dropped. Unknown downloads (lookup failed) keeps the
+    signal: failing toward flagging, same as the detonation pre-filter."""
+    if downloads_last_month is None or downloads_last_month < TYPOSQUAT_ESTABLISHED_DOWNLOADS:
+        return signals
+    return [s for s in signals if s.category != "typosquat-candidate"]
 
 
 _CHILD_PROCESS_IMPORT = re.compile(
