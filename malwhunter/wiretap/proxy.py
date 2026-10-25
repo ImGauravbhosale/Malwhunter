@@ -10,10 +10,22 @@ CONNECT destinations are still logged (so "talks to an unrecognized host"
 is a real signal even over HTTPS), but body contents aren't inspected.
 Full MITM interception is flagged as a v2 improvement in the project plan,
 not silently skipped.
+
+Only *public* destinations are relayed. The proxy is the one door out of
+the sandbox, so whatever it can reach, the package under analysis can
+reach: without this check, `curl http://127.0.0.1:5432` or a CONNECT to
+169.254.169.254 (cloud credentials) would be relayed from wherever the
+proxy runs. Every destination is resolved first, refused if any address
+is loopback/private/link-local/reserved, and the connection is made to
+the exact address that was checked — so a hostname can't pass the check
+and then re-resolve somewhere internal (DNS rebinding).
 """
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import socket
+from collections.abc import Callable
 from dataclasses import dataclass
 
 # How long to wait for the outbound connection to an install script's
@@ -39,11 +51,55 @@ class CapturedConnect:
     port: int
 
 
+@dataclass
+class CapturedBlocked:
+    """A relay the proxy refused because the destination is internal."""
+
+    host: str
+    port: int
+    address: str
+
+
+# (kind, record) for every captured event, as it happens — lets the proxy
+# stream its log out of a container instead of only holding it in memory.
+EventCallback = Callable[[str, object], None]
+
+
+def is_public_address(address: str) -> bool:
+    ip = ipaddress.ip_address(address.split("%", 1)[0])  # drop an IPv6 zone id
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped  # ::ffff:127.0.0.1 is still loopback
+    return ip.is_global and not ip.is_multicast
+
+
 class WiretapProxy:
-    def __init__(self) -> None:
+    def __init__(self, *, allow_internal: bool = False, on_event: EventCallback | None = None) -> None:
         self.http_requests: list[CapturedHttpRequest] = []
         self.connects: list[CapturedConnect] = []
+        self.blocked: list[CapturedBlocked] = []
+        # Only for the proxy's own tests, which talk to a local echo server.
+        self._allow_internal = allow_internal
+        self._on_event = on_event
         self._server: asyncio.base_events.Server | None = None
+
+    def _record(self, kind: str, record: object, into: list) -> None:
+        into.append(record)
+        if self._on_event is not None:
+            self._on_event(kind, record)
+
+    async def _open_vetted(
+        self, host: str, port: int
+    ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter] | None:
+        """Resolves, refuses internal destinations, then connects to the
+        checked address itself. None means refused (and recorded)."""
+        infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        addresses = [info[4][0] for info in infos]
+        if not self._allow_internal:
+            internal = next((a for a in addresses if not is_public_address(a)), None)
+            if internal is not None:
+                self._record("blocked", CapturedBlocked(host=host, port=port, address=internal), self.blocked)
+                return None
+        return await asyncio.wait_for(asyncio.open_connection(addresses[0], port), timeout=_CONNECT_TIMEOUT_SECONDS)
 
     async def start(self, host: str = "127.0.0.1", port: int = 0) -> int:
         self._server = await asyncio.start_server(self._handle_client, host, port)
@@ -88,17 +144,19 @@ class WiretapProxy:
             if method.upper() == "CONNECT":
                 host, _, port_str = target.partition(":")
                 port = int(port_str) if port_str.isdigit() else 443
-                self.connects.append(CapturedConnect(host=host, port=port))
+                self._record("connect", CapturedConnect(host=host, port=port), self.connects)
                 await self._relay_connect(reader, writer, host, port)
                 return
 
             content_length = int(headers.get("content-length", "0") or "0")
             body = await reader.readexactly(content_length) if content_length else b""
 
-            self.http_requests.append(
+            self._record(
+                "http",
                 CapturedHttpRequest(
                     method=method, url=target, host=headers.get("host", ""), headers=dict(headers), body=body
-                )
+                ),
+                self.http_requests,
             )
             await self._forward_http(writer, method, target, headers, body)
         except (asyncio.IncompleteReadError, ConnectionResetError, ValueError, OSError):
@@ -113,9 +171,7 @@ class WiretapProxy:
         self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter, host: str, port: int
     ) -> None:
         try:
-            remote_reader, remote_writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=_CONNECT_TIMEOUT_SECONDS
-            )
+            opened = await self._open_vetted(host, port)
         except (OSError, TimeoutError):
             # A black-holed/unroutable destination (e.g. a non-existent C2
             # server) can otherwise hang here far longer than a real
@@ -125,6 +181,11 @@ class WiretapProxy:
             client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
             await client_writer.drain()
             return
+        if opened is None:
+            client_writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+            await client_writer.drain()
+            return
+        remote_reader, remote_writer = opened
 
         client_writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await client_writer.drain()
@@ -164,13 +225,16 @@ class WiretapProxy:
         port = int(port_str) if port_str.isdigit() else 80
 
         try:
-            remote_reader, remote_writer = await asyncio.wait_for(
-                asyncio.open_connection(host, port), timeout=_CONNECT_TIMEOUT_SECONDS
-            )
+            opened = await self._open_vetted(host, port)
         except (OSError, TimeoutError):
             client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
             await client_writer.drain()
             return
+        if opened is None:
+            client_writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+            await client_writer.drain()
+            return
+        remote_reader, remote_writer = opened
 
         path = target
         if target.startswith("http://") or target.startswith("https://"):

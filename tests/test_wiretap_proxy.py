@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from malwhunter.wiretap.canary import find_leaked_canaries, generate_canaries
-from malwhunter.wiretap.proxy import WiretapProxy
+from malwhunter.wiretap.proxy import WiretapProxy, is_public_address
 
 
 async def _run_echo_server() -> tuple[asyncio.base_events.Server, int]:
@@ -27,7 +27,7 @@ async def _run_echo_server() -> tuple[asyncio.base_events.Server, int]:
 @pytest.mark.asyncio
 async def test_plain_http_request_is_captured_and_forwarded():
     echo_server, echo_port = await _run_echo_server()
-    proxy = WiretapProxy()
+    proxy = WiretapProxy(allow_internal=True)  # the echo server is on loopback
     proxy_port = await proxy.start()
 
     reader, writer = await asyncio.open_connection("127.0.0.1", proxy_port)
@@ -87,3 +87,72 @@ def test_find_leaked_canaries_detects_substring_match():
 def test_find_leaked_canaries_empty_when_no_match():
     canaries = {"NPM_TOKEN": "canary_abc123"}
     assert find_leaked_canaries("nothing sensitive here", canaries) == []
+
+
+async def _send_through_proxy(proxy_port: int, raw: bytes) -> bytes:
+    reader, writer = await asyncio.open_connection("127.0.0.1", proxy_port)
+    writer.write(raw)
+    await writer.drain()
+    response = await reader.read(4096)
+    writer.close()
+    return response
+
+
+@pytest.mark.asyncio
+async def test_plain_http_to_a_loopback_service_is_refused_and_recorded():
+    # Found by live-testing Detonation: a sandboxed postinstall read a
+    # loopback-only host service by asking the proxy to fetch it.
+    echo_server, echo_port = await _run_echo_server()
+    events = []
+    proxy = WiretapProxy(on_event=lambda kind, rec: events.append(kind))
+    proxy_port = await proxy.start()
+
+    response = await _send_through_proxy(
+        proxy_port, f"GET http://127.0.0.1:{echo_port}/ HTTP/1.1\r\nHost: 127.0.0.1:{echo_port}\r\n\r\n".encode()
+    )
+
+    assert b"403 Forbidden" in response
+    assert b'{"ok": true}' not in response
+    assert len(proxy.http_requests) == 1  # still captured: canary matching runs on it regardless
+    assert [(b.host, b.port, b.address) for b in proxy.blocked] == [("127.0.0.1", echo_port, "127.0.0.1")]
+    assert events == ["http", "blocked"]
+    await proxy.stop()
+    echo_server.close()
+    await echo_server.wait_closed()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["127.0.0.1:22", "localhost:5432", "169.254.169.254:80", "10.0.0.5:443"])
+async def test_connect_to_internal_destinations_is_refused(target):
+    proxy = WiretapProxy()
+    proxy_port = await proxy.start()
+
+    response = await _send_through_proxy(proxy_port, f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
+
+    assert b"403 Forbidden" in response
+    assert len(proxy.connects) == 1
+    assert len(proxy.blocked) == 1
+    await proxy.stop()
+
+
+@pytest.mark.parametrize(
+    "address,public",
+    [
+        ("93.184.215.14", True),
+        ("2606:4700::6810:84e5", True),
+        ("127.0.0.1", False),
+        ("::1", False),
+        ("::ffff:127.0.0.1", False),  # IPv4-mapped loopback
+        ("10.1.2.3", False),
+        ("172.17.0.1", False),       # default docker bridge gateway
+        ("192.168.1.1", False),
+        ("169.254.169.254", False),  # cloud metadata
+        ("100.64.0.1", False),       # carrier-grade NAT
+        ("0.0.0.0", False),
+        ("fe80::1%eth0", False),     # link-local with zone id
+        ("fd00::1", False),          # unique local
+        ("224.0.0.1", False),        # multicast
+    ],
+)
+def test_is_public_address(address, public):
+    assert is_public_address(address) is public
