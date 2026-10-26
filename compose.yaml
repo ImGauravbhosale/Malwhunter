@@ -1,0 +1,23 @@
+name: malwhunter-old-cli
+services:
+  malwhunter:
+    image: malwhunter-old-cli:local
+    build:
+      context: .
+    stdin_open: true
+    tty: true
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=268435456,uid=10001,gid=10001,mode=0700
+    volumes:
+      - type: bind
+        source: ${PROJECT_DIR:-.}
+        target: /project
+        read_only: true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1
+    restart: "no"

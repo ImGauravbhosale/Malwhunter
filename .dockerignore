@@ -1,0 +1,17 @@
+.git
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.malwhunter
+.env
+.env.*
+.npmrc
+.aws
+.codex
+**/auth.json
+**/node_modules
+build
+dist
+reports
