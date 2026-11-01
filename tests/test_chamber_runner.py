@@ -299,7 +299,9 @@ def test_capture_from_the_proxy_container_becomes_signals(tmp_path, fake_docker)
         {"kind": "blocked", "host": "localhost", "port": 5432, "address": "127.0.0.1"},
     ]
     package_dir, package_json = _package(tmp_path)
-    signals = detonate_package("x", "1.0.0", package_dir, package_json)
+    # tracing off: this test is about classifying what the proxy captured, and the fake
+    # docker never runs strace, so there is no trace to read
+    signals = detonate_package("x", "1.0.0", package_dir, package_json, trace=False)
     assert {s.category for s in signals} == {"unexpected-network-destination", "internal-network-probe"}
 
 

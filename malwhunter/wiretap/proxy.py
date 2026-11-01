@@ -1,15 +1,17 @@
 """A minimal, in-process recording proxy for the Chamber's sandboxed
 container to route through. Lets legitimate traffic complete (so installs
 actually finish and produce real signal) while logging everything it
-sees: full plain-HTTP requests, and destination host:port for HTTPS
-CONNECT tunnels.
+sees: full plain-HTTP requests and, when TLS interception is on, full HTTPS
+requests too; otherwise just the destination host:port of HTTPS tunnels.
 
-Deliberately does NOT attempt TLS interception in v1 — canary/tripwire
-matching against request contents only works for plain HTTP today. HTTPS
-CONNECT destinations are still logged (so "talks to an unrecognized host"
-is a real signal even over HTTPS), but body contents aren't inspected.
-Full MITM interception is flagged as a v2 improvement in the project plan,
-not silently skipped.
+HTTPS contents: with an `interceptor` (see tls_intercept.py) a CONNECT tunnel
+is terminated with a certificate from a per-run CA that only the sandbox is
+told to trust, the request is read, then re-sent over a normally verified
+TLS connection to the real server. That is what lets the canary tripwires
+catch a secret sent over HTTPS. Without an interceptor the tunnel is relayed
+blind and only the destination is known. A client that refuses the proxy's
+certificate (pinning, or ignoring the CA) simply fails its handshake: the
+connection attempt is still recorded, and nothing reaches the network.
 
 Only *public* destinations are relayed. The proxy is the one door out of
 the sandbox, so whatever it can reach, the package under analysis can
@@ -25,8 +27,10 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+import ssl
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Protocol
 
 # How long to wait for the outbound connection to an install script's
 # target before giving up. Without this, a black-holed/unroutable
@@ -34,6 +38,13 @@ from dataclasses import dataclass
 # which then also delays shutdown since that stuck task has to be waited
 # on (or cancelled) before the proxy can stop.
 _CONNECT_TIMEOUT_SECONDS = 10
+_TLS_HANDSHAKE_TIMEOUT_SECONDS = 10
+# A request's body is held in memory to be inspected and re-sent. Real
+# exfiltration is small; a multi-megabyte upload from an install script is
+# refused (and recorded) rather than buffered without limit.
+MAX_BODY_BYTES = 8 * 1024 * 1024
+_MAX_HEADER_LINES = 200
+_MAX_LINE_BYTES = 65536
 
 
 @dataclass
@@ -43,6 +54,7 @@ class CapturedHttpRequest:
     host: str
     headers: dict[str, str]
     body: bytes
+    scheme: str = "http"  # "https" when read from inside an intercepted tunnel
 
 
 @dataclass
@@ -65,6 +77,12 @@ class CapturedBlocked:
 EventCallback = Callable[[str, object], None]
 
 
+class Interceptor(Protocol):
+    """What the proxy needs from tls_intercept.CertificateAuthority."""
+
+    def server_context(self, host: str) -> ssl.SSLContext: ...
+
+
 def is_public_address(address: str) -> bool:
     ip = ipaddress.ip_address(address.split("%", 1)[0])  # drop an IPv6 zone id
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
@@ -72,14 +90,119 @@ def is_public_address(address: str) -> bool:
     return ip.is_global and not ip.is_multicast
 
 
+class _BadRequest(Exception):
+    pass
+
+
+class _TooLarge(Exception):
+    pass
+
+
+@dataclass
+class _Request:
+    method: str
+    target: str
+    headers: dict[str, str]
+    body: bytes
+
+
+async def _read_line(reader: asyncio.StreamReader) -> bytes:
+    line = await reader.readline()
+    if len(line) > _MAX_LINE_BYTES:
+        raise _BadRequest("line too long")
+    return line
+
+
+async def _read_request(reader: asyncio.StreamReader, first_line: bytes | None = None) -> _Request | None:
+    """One HTTP/1.x request: head and complete body (Content-Length or
+    chunked). None when the peer closed before sending anything."""
+    first_line = first_line if first_line is not None else await _read_line(reader)
+    if not first_line.strip():
+        return None
+    parts = first_line.decode("latin-1", errors="replace").strip().split(" ")
+    if len(parts) < 3:
+        raise _BadRequest("malformed request line")
+    method, target = parts[0], parts[1]
+
+    headers: dict[str, str] = {}
+    for _ in range(_MAX_HEADER_LINES):
+        line = await _read_line(reader)
+        if line in (b"\r\n", b"\n", b""):
+            break
+        if b":" in line:
+            k, _, v = line.decode("latin-1", errors="replace").partition(":")
+            headers[k.strip().lower()] = v.strip()
+    else:
+        raise _BadRequest("too many headers")
+
+    if method.upper() == "CONNECT":
+        return _Request(method, target, headers, b"")
+
+    if "chunked" in headers.get("transfer-encoding", "").lower():
+        body = await _read_chunked(reader)
+    else:
+        length = int(headers.get("content-length", "0") or "0")
+        if length < 0 or length > MAX_BODY_BYTES:
+            raise _TooLarge(f"request body of {length} bytes")
+        body = await reader.readexactly(length) if length else b""
+    return _Request(method, target, headers, body)
+
+
+async def _read_chunked(reader: asyncio.StreamReader) -> bytes:
+    body = bytearray()
+    while True:
+        size_line = (await _read_line(reader)).split(b";", 1)[0].strip()
+        size = int(size_line, 16)
+        if size == 0:
+            while (await _read_line(reader)) not in (b"\r\n", b"\n", b""):
+                pass  # trailers
+            return bytes(body)
+        if len(body) + size > MAX_BODY_BYTES:
+            raise _TooLarge("chunked request body")
+        body.extend(await reader.readexactly(size))
+        await reader.readexactly(2)  # the CRLF that ends the chunk
+
+
+def _origin_form(target: str) -> str:
+    """`http://host/path?q` -> `/path?q`; a request target that is already a path is unchanged."""
+    if target.startswith(("http://", "https://")):
+        _, _, after_scheme = target.partition("://")
+        _, slash, tail = after_scheme.partition("/")
+        return "/" + tail if slash else "/"
+    return target
+
+
+def _serialize(request: _Request) -> bytes:
+    """The request as it is sent upstream: always `Connection: close`, and a
+    body that was chunked is re-framed with a Content-Length."""
+    lines = [f"{request.method} {_origin_form(request.target)} HTTP/1.1\r\n"]
+    for k, v in request.headers.items():
+        if k in ("proxy-connection", "connection", "keep-alive", "transfer-encoding", "content-length", "expect"):
+            continue
+        lines.append(f"{k}: {v}\r\n")
+    if request.body or request.method.upper() in ("POST", "PUT", "PATCH"):
+        lines.append(f"content-length: {len(request.body)}\r\n")
+    lines.append("connection: close\r\n\r\n")
+    return "".join(lines).encode("latin-1", errors="replace") + request.body
+
+
 class WiretapProxy:
-    def __init__(self, *, allow_internal: bool = False, on_event: EventCallback | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        allow_internal: bool = False,
+        on_event: EventCallback | None = None,
+        interceptor: Interceptor | None = None,
+        upstream_tls: ssl.SSLContext | None = None,
+    ) -> None:
         self.http_requests: list[CapturedHttpRequest] = []
         self.connects: list[CapturedConnect] = []
         self.blocked: list[CapturedBlocked] = []
         # Only for the proxy's own tests, which talk to a local echo server.
         self._allow_internal = allow_internal
         self._on_event = on_event
+        self._interceptor = interceptor
+        self._upstream_tls = upstream_tls
         self._server: asyncio.base_events.Server | None = None
 
     def _record(self, kind: str, record: object, into: list) -> None:
@@ -124,41 +247,36 @@ class WiretapProxy:
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            first_line = await reader.readline()
-            if not first_line:
+            try:
+                request = await _read_request(reader)
+            except _TooLarge:
+                writer.write(b"HTTP/1.1 413 Payload Too Large\r\nconnection: close\r\n\r\n")
+                await writer.drain()
                 return
-            parts = first_line.decode("latin-1", errors="replace").strip().split(" ")
-            if len(parts) < 3:
+            except _BadRequest:
                 return
-            method, target, _version = parts[0], parts[1], parts[2]
+            if request is None:
+                return
 
-            headers: dict[str, str] = {}
-            while True:
-                line = await reader.readline()
-                if line in (b"\r\n", b"\n", b""):
-                    break
-                if b":" in line:
-                    k, _, v = line.decode("latin-1", errors="replace").partition(":")
-                    headers[k.strip().lower()] = v.strip()
-
-            if method.upper() == "CONNECT":
-                host, _, port_str = target.partition(":")
+            if request.method.upper() == "CONNECT":
+                host, _, port_str = request.target.partition(":")
                 port = int(port_str) if port_str.isdigit() else 443
                 self._record("connect", CapturedConnect(host=host, port=port), self.connects)
-                await self._relay_connect(reader, writer, host, port)
+                if self._interceptor is not None:
+                    await self._intercept_connect(reader, writer, host, port)
+                else:
+                    await self._relay_connect(reader, writer, host, port)
                 return
-
-            content_length = int(headers.get("content-length", "0") or "0")
-            body = await reader.readexactly(content_length) if content_length else b""
 
             self._record(
                 "http",
                 CapturedHttpRequest(
-                    method=method, url=target, host=headers.get("host", ""), headers=dict(headers), body=body
+                    method=request.method, url=request.target, host=request.headers.get("host", ""),
+                    headers=dict(request.headers), body=request.body,
                 ),
                 self.http_requests,
             )
-            await self._forward_http(writer, method, target, headers, body)
+            await self._forward_http(writer, request)
         except (asyncio.IncompleteReadError, ConnectionResetError, ValueError, OSError):
             pass  # the sandboxed package disconnecting mid-request isn't itself a signal
         finally:
@@ -167,9 +285,9 @@ class WiretapProxy:
             except Exception:  # best-effort close during cleanup, any failure here is moot  # nosec B110
                 pass
 
-    async def _relay_connect(
-        self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter, host: str, port: int
-    ) -> None:
+    async def _connect_upstream(self, writer: asyncio.StreamWriter, host: str, port: int):
+        """The vetted connection to the destination, or None after the
+        client has been told why not (502 unreachable, 403 internal)."""
         try:
             opened = await self._open_vetted(host, port)
         except (OSError, TimeoutError):
@@ -178,12 +296,19 @@ class WiretapProxy:
             # connection failure would — observed in practice connecting
             # to a reserved test address from a different network than
             # the one this was first verified on.
-            client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-            await client_writer.drain()
-            return
+            writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+            await writer.drain()
+            return None
         if opened is None:
-            client_writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
-            await client_writer.drain()
+            writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
+            await writer.drain()
+        return opened
+
+    async def _relay_connect(
+        self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter, host: str, port: int
+    ) -> None:
+        opened = await self._connect_upstream(client_writer, host, port)
+        if opened is None:
             return
         remote_reader, remote_writer = opened
 
@@ -208,15 +333,84 @@ class WiretapProxy:
 
         await asyncio.gather(pump(client_reader, remote_writer), pump(remote_reader, client_writer))
 
-    async def _forward_http(
-        self,
-        client_writer: asyncio.StreamWriter,
-        method: str,
-        target: str,
-        headers: dict[str, str],
-        body: bytes,
+    async def _intercept_connect(
+        self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter, host: str, port: int
     ) -> None:
-        host_header = headers.get("host", "")
+        """Ends the sandbox's TLS here, records the request inside it, and
+        re-sends it to the real server over verified TLS."""
+        interceptor = self._interceptor
+        if interceptor is None:
+            return
+        opened = await self._connect_upstream(client_writer, host, port)
+        if opened is None:
+            return
+        remote_reader, remote_writer = opened
+
+        client_writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        await client_writer.drain()
+        try:
+            await asyncio.wait_for(
+                client_writer.start_tls(interceptor.server_context(host)), timeout=_TLS_HANDSHAKE_TIMEOUT_SECONDS
+            )
+        except (ssl.SSLError, OSError, TimeoutError, ConnectionResetError):
+            remote_writer.close()
+            return  # the client does not trust the proxy's certificate; the attempt is already recorded as a CONNECT
+
+        try:
+            request = await _read_request(client_reader)
+        except _TooLarge:
+            client_writer.write(b"HTTP/1.1 413 Payload Too Large\r\nconnection: close\r\n\r\n")
+            await client_writer.drain()
+            remote_writer.close()
+            return
+        except _BadRequest:
+            remote_writer.close()
+            return
+        if request is None:
+            remote_writer.close()
+            return
+
+        shown_host = request.headers.get("host") or host
+        self._record(
+            "http",
+            CapturedHttpRequest(
+                method=request.method,
+                url=f"https://{shown_host}{_origin_form(request.target)}",
+                host=shown_host,
+                headers=dict(request.headers),
+                body=request.body,
+                scheme="https",
+            ),
+            self.http_requests,
+        )
+
+        try:
+            await asyncio.wait_for(
+                remote_writer.start_tls(
+                    self._upstream_tls or ssl.create_default_context(), server_hostname=host
+                ),
+                timeout=_TLS_HANDSHAKE_TIMEOUT_SECONDS,
+            )
+        except (ssl.SSLError, OSError, TimeoutError):
+            client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\nconnection: close\r\n\r\n")
+            await client_writer.drain()
+            remote_writer.close()
+            return
+
+        try:
+            remote_writer.write(_serialize(request))
+            await remote_writer.drain()
+            while True:
+                chunk = await remote_reader.read(65536)
+                if not chunk:
+                    break
+                client_writer.write(chunk)
+                await client_writer.drain()
+        finally:
+            remote_writer.close()
+
+    async def _forward_http(self, client_writer: asyncio.StreamWriter, request: _Request) -> None:
+        host_header = request.headers.get("host", "")
         if not host_header:
             client_writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
             await client_writer.drain()
@@ -224,35 +418,13 @@ class WiretapProxy:
         host, _, port_str = host_header.partition(":")
         port = int(port_str) if port_str.isdigit() else 80
 
-        try:
-            opened = await self._open_vetted(host, port)
-        except (OSError, TimeoutError):
-            client_writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
-            await client_writer.drain()
-            return
+        opened = await self._connect_upstream(client_writer, host, port)
         if opened is None:
-            client_writer.write(b"HTTP/1.1 403 Forbidden\r\n\r\n")
-            await client_writer.drain()
             return
         remote_reader, remote_writer = opened
 
-        path = target
-        if target.startswith("http://") or target.startswith("https://"):
-            _, _, after_scheme = target.partition("://")
-            _, slash, tail = after_scheme.partition("/")
-            path = "/" + tail if slash else "/"
-
-        request_lines = [f"{method} {path} HTTP/1.1\r\n"]
-        for k, v in headers.items():
-            if k == "proxy-connection":
-                continue
-            request_lines.append(f"{k}: {v}\r\n")
-        request_lines.append("connection: close\r\n\r\n")
-
         try:
-            remote_writer.write("".join(request_lines).encode("latin-1"))
-            if body:
-                remote_writer.write(body)
+            remote_writer.write(_serialize(request))
             await remote_writer.drain()
 
             while True:

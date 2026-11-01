@@ -129,6 +129,16 @@ _JS_SUFFIX = re.compile(r"[.\-_]?js$")
 _SEPARATORS = re.compile(r"[.\-_]")
 
 
+def looks_like_alphabet(text: str) -> bool:
+    """A character table (`ABC...XYZabc...`, a base64 or base32 alphabet) has
+    maximal entropy because every character is distinct, but it is the
+    opposite of a packed payload: most neighbours are consecutive."""
+    if len(text) < 2:
+        return False
+    consecutive = sum(1 for a, b in zip(text, text[1:], strict=False) if ord(b) == ord(a) + 1)
+    return consecutive / (len(text) - 1) > 0.4
+
+
 def has_computed_arg(call_match: re.Match) -> bool:
     rest = call_match.group(2)
     return not bool(_LITERAL_ARG_START.match(rest))
@@ -182,12 +192,35 @@ def _max_typo_distance(popular: str) -> int:
     return 1 if len(popular) <= 8 else 2
 
 
-def closest_typosquat_target(package_name: str) -> str | None:
+# PyPI names are normalized (lowercase, dashes) before they get here.
+POPULAR_PYPI_NAMES = (
+    "requests", "numpy", "pandas", "urllib3", "boto3", "botocore", "setuptools", "wheel", "pip", "django",
+    "flask", "scipy", "matplotlib", "pillow", "pyyaml", "cryptography", "sqlalchemy", "jinja2", "click",
+    "certifi", "idna", "charset-normalizer", "six", "python-dateutil", "pytest", "tensorflow", "torch",
+    "scikit-learn", "beautifulsoup4", "lxml", "selenium", "aiohttp", "fastapi", "pydantic", "colorama",
+    "attrs", "packaging", "typing-extensions", "protobuf", "grpcio", "pytz", "tqdm", "httpx", "psycopg2",
+    "pymysql", "redis", "celery", "gunicorn", "uvicorn", "openpyxl", "paramiko", "pyopenssl", "pycryptodome",
+    "opencv-python", "keras", "transformers", "openai", "anthropic", "langchain", "poetry", "twine", "virtualenv",
+)
+KNOWN_LEGIT_NEAR_PYPI = frozenset(
+    {"pytest-cov", "pyyaml-env-tag", "urllib2", "numpy-financial", "pandas-gbq", "django-cors-headers", "flask-cors",
+     "pycryptodomex", "pillow-heif", "pyjwt", "pypdf", "pyspark", "pip-tools", "pip-api", "uvloop", "ujson",
+     "orjson", "simplejson", "tqdm-multiprocess", "request", "responses", "pyserial"}
+)
+
+
+def closest_typosquat_target(
+    package_name: str,
+    popular_names: tuple[str, ...] | None = None,
+    legit_near: frozenset[str] | None = None,
+) -> str | None:
+    popular_names = POPULAR_PACKAGE_NAMES if popular_names is None else popular_names
+    legit_near = KNOWN_LEGIT_NEAR_NAMES if legit_near is None else legit_near
     name = package_name.lower()
-    if name in POPULAR_PACKAGE_NAMES or name in KNOWN_LEGIT_NEAR_NAMES:
+    if name in popular_names or name in legit_near:
         return None
     unsuffixed = _JS_SUFFIX.sub("", name)
-    for popular in POPULAR_PACKAGE_NAMES:
+    for popular in popular_names:
         if osa_distance(name, popular) <= _max_typo_distance(popular):
             return popular
         if unsuffixed != name and unsuffixed == popular:

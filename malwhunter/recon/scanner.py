@@ -9,6 +9,7 @@ from pathlib import Path
 
 from malwhunter.analyst.session import Analyst
 from malwhunter.dossier.model import Evidence, Severity, Signal, SignalSource, signal_id
+from malwhunter.recon import ast_js
 from malwhunter.recon.catalog import (
     BULK_ENV_ENUMERATION,
     CI_ENVIRONMENT_CHECK,
@@ -25,6 +26,7 @@ from malwhunter.recon.catalog import (
     TYPOSQUAT_ESTABLISHED_DOWNLOADS,
     closest_typosquat_target,
     has_computed_arg,
+    looks_like_alphabet,
     shannon_entropy,
 )
 
@@ -38,7 +40,10 @@ def _iter_source_files(package_dir: Path):
     for path in sorted(package_dir.rglob("*")):
         if not path.is_file():
             continue
-        if any(part in _SKIP_DIRS for part in path.parts):
+        # relative parts: an absolute path can contain a skipped directory
+        # name (a scratch dir under a "node_modules" checkout) that says
+        # nothing about the package itself
+        if any(part in _SKIP_DIRS for part in path.relative_to(package_dir).parts):
             continue
         if path.suffix not in _SOURCE_EXTENSIONS:
             continue
@@ -67,8 +72,13 @@ def scan_lifecycle_scripts(package_name: str, scripts: dict[str, str]) -> list[S
     return signals
 
 
-def scan_typosquat(package_name: str) -> list[Signal]:
-    target = closest_typosquat_target(package_name)
+def scan_typosquat(package_name: str, ecosystem: str = "npm") -> list[Signal]:
+    if ecosystem == "pypi":
+        from malwhunter.recon.catalog import KNOWN_LEGIT_NEAR_PYPI, POPULAR_PYPI_NAMES
+
+        target = closest_typosquat_target(package_name, POPULAR_PYPI_NAMES, KNOWN_LEGIT_NEAR_PYPI)
+    else:
+        target = closest_typosquat_target(package_name)
     if target is None:
         return []
     return [
@@ -127,6 +137,41 @@ def _is_regexp_exec_false_positive(line: str, exec_match, file_imports_child_pro
     return not file_imports_child_process
 
 
+def _signals_from_ast(findings: list[ast_js.AstFinding], rel_path: str, text: str) -> list[Signal]:
+    source_lines = text.split("\n")
+    signals: list[Signal] = []
+    seen: set[tuple[str, int]] = set()
+    for f in findings:
+        excerpt = source_lines[f.line - 1].strip()[:300] if 0 < f.line <= len(source_lines) else f.name
+        if f.kind == "command-exec":
+            category, description = "command-exec-computed-arg", f"`{f.name}` called with a computed (non-literal) command"
+        elif f.kind == "eval":
+            category, description = "eval-computed-arg", f"`{f.name}` called with a computed (non-literal) argument"
+        elif f.kind == "shell-pipe":
+            category = "command-exec-shell-pipe"
+            description = f"`{f.name}` runs a command that pipes a remote or decoded payload into a shell"
+        else:  # obfuscated-module-load
+            category = "obfuscated-module-load"
+            description = (
+                f"loads the built-in module '{f.name}' from a string assembled at runtime — "
+                "a way to hide it from scanners that nothing legitimate needs"
+            )
+        if (category, f.line) in seen:
+            continue
+        seen.add((category, f.line))
+        signals.append(
+            Signal(
+                id=signal_id(SignalSource.RECON, category, f"{rel_path}:{f.line}"),
+                source=SignalSource.RECON,
+                category=category,
+                severity=Severity.HIGH,
+                description=description,
+                evidence=[Evidence(excerpt=excerpt, file=rel_path, line=f.line, detail="syntax-tree match" if not f.detail else f.detail)],
+            )
+        )
+    return signals
+
+
 def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) -> list[Signal]:
     signals: list[Signal] = []
     try:
@@ -137,6 +182,9 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
     rel_path = str(path.relative_to(package_dir))
     lines = text.splitlines()
     file_imports_child_process = bool(_CHILD_PROCESS_IMPORT.search(text))
+    # When the file parses, the syntax tree decides eval/exec findings (it knows
+    # what `exec` is bound to). When it doesn't, the regex rules below run as before.
+    ast_findings = ast_js.analyze(text)
 
     sensitive_evidence: Evidence | None = None
     network_evidence: Evidence | None = None
@@ -144,7 +192,7 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
 
     for lineno, line in enumerate(lines, start=1):
         eval_match = EVAL_FAMILY_CALL.search(line)
-        if eval_match and has_computed_arg(eval_match):
+        if ast_findings is None and eval_match and has_computed_arg(eval_match):
             signals.append(
                 Signal(
                     id=signal_id(SignalSource.RECON, "eval-computed-arg", f"{rel_path}:{lineno}"),
@@ -158,7 +206,8 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
 
         exec_match = COMMAND_EXEC_CALL.search(line)
         if (
-            exec_match
+            ast_findings is None
+            and exec_match
             and has_computed_arg(exec_match)
             and not _is_regexp_exec_false_positive(line, exec_match, file_imports_child_process)
         ):
@@ -231,7 +280,11 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
             network_evidence = Evidence(excerpt=line.strip(), file=rel_path, line=lineno)
 
         blob_match = PACKED_STRING_CANDIDATE.search(line)
-        if blob_match and shannon_entropy(blob_match.group(1)) >= _ENTROPY_THRESHOLD:
+        if (
+            blob_match
+            and shannon_entropy(blob_match.group(1)) >= _ENTROPY_THRESHOLD
+            and not looks_like_alphabet(blob_match.group(1))
+        ):
             excerpt = blob_match.group(1)[:80] + "..."
             signals.append(
                 Signal(
@@ -249,6 +302,9 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
                 from malwhunter.analyst.judge import judge_packed_blob
 
                 signals.extend(judge_packed_blob(analyst, file=rel_path, line=lineno, excerpt=excerpt))
+
+    if ast_findings:
+        signals.extend(_signals_from_ast(ast_findings, rel_path, text))
 
     if sensitive_evidence is not None and network_evidence is not None:
         signals.append(
@@ -277,14 +333,107 @@ def _scan_source_file(package_dir: Path, path: Path, analyst: Analyst | None) ->
     return signals
 
 
+# Every packed-looking string costs two `claude` calls. A minified bundle can
+# hold hundreds, so one package gets a fixed budget instead of an open tab.
+_ANALYST_CALL_BUDGET = 20
+
+
+class _BudgetedAnalyst:
+    """Wraps an Analyst so one package can't run up an unbounded number of
+    calls (each is a network round-trip, and sends package code off-box).
+    Once spent, further questions come back as 'no opinion', never as a
+    verdict either way."""
+
+    def __init__(self, analyst: Analyst, budget: int) -> None:
+        self._analyst = analyst
+        self._remaining = budget
+
+    def ask(self, *, system: str, prompt: str):
+        from malwhunter.analyst.session import Verdict
+
+        if self._remaining <= 0:
+            return Verdict(ok=False, malicious=False, confidence=0.0, rationale="", error="analyst budget exhausted")
+        self._remaining -= 1
+        return self._analyst.ask(system=system, prompt=prompt)
+
+
+def _bin_files(package_dir: Path, package_json: dict) -> list[Path]:
+    """Files named in package.json's `bin` run as commands but often have no
+    .js extension, so the extension filter alone would never read them."""
+    bin_field = package_json.get("bin") if isinstance(package_json, dict) else None
+    entries = [bin_field] if isinstance(bin_field, str) else list(bin_field.values()) if isinstance(bin_field, dict) else []
+    root = package_dir.resolve()
+    found: list[Path] = []
+    for entry in entries:
+        if not isinstance(entry, str):
+            continue
+        candidate = (package_dir / entry).resolve()
+        if candidate.is_file() and root in candidate.parents:
+            found.append(package_dir / candidate.relative_to(root))
+    return found
+
+
+def _coverage_gaps(package_dir: Path, package_json: dict) -> list[Signal]:
+    """LOW-severity notes on what Recon did NOT read, so the report never
+    implies a package was fully covered when part of it was skipped. LOW
+    signals don't change a verdict — they are context for a reader."""
+    signals: list[Signal] = []
+    skipped: list[str] = []
+    for path in sorted(package_dir.rglob("*")):
+        try:
+            if (
+                path.is_file()
+                and path.suffix in _SOURCE_EXTENSIONS
+                and path.stat().st_size > _MAX_FILE_SIZE
+                and not any(part in _SKIP_DIRS for part in path.relative_to(package_dir).parts)
+            ):
+                skipped.append(str(path.relative_to(package_dir)))
+        except OSError:
+            continue
+    if skipped:
+        shown = ", ".join(skipped[:5]) + (f" (+{len(skipped) - 5} more)" if len(skipped) > 5 else "")
+        signals.append(
+            Signal(
+                id=signal_id(SignalSource.RECON, "scan-coverage-gap", "oversized"),
+                source=SignalSource.RECON,
+                category="scan-coverage-gap",
+                severity=Severity.LOW,
+                description=f"{len(skipped)} source file(s) over {_MAX_FILE_SIZE // 1_000_000} MB were not scanned",
+                evidence=[Evidence(excerpt=shown, detail="skipped: file too large for Recon")],
+            )
+        )
+
+    bundled = package_json.get("bundledDependencies", package_json.get("bundleDependencies")) if isinstance(package_json, dict) else None
+    nested = package_dir / "node_modules"
+    if bundled or (nested.is_dir() and any(nested.rglob("*.js"))):
+        signals.append(
+            Signal(
+                id=signal_id(SignalSource.RECON, "scan-coverage-gap", "bundled"),
+                source=SignalSource.RECON,
+                category="scan-coverage-gap",
+                severity=Severity.LOW,
+                description="this package ships bundled dependencies (node_modules) that were not scanned",
+                evidence=[Evidence(excerpt=str(bundled) if bundled else "node_modules/", detail="skipped: bundled dependencies")],
+            )
+        )
+    return signals
+
+
 def run_recon(
     package_dir: Path, package_name: str, package_json: dict, *, analyst: Analyst | None = None
 ) -> list[Signal]:
     from malwhunter.intake.manifest import get_lifecycle_scripts
 
+    if analyst is not None:
+        analyst = _BudgetedAnalyst(analyst, _ANALYST_CALL_BUDGET)  # type: ignore[assignment]
+
     signals: list[Signal] = []
     signals.extend(scan_lifecycle_scripts(package_name, get_lifecycle_scripts(package_json)))
     signals.extend(scan_typosquat(package_name))
-    for path in _iter_source_files(package_dir):
+    paths = list(_iter_source_files(package_dir))
+    seen = {p.resolve() for p in paths}
+    paths.extend(p for p in _bin_files(package_dir, package_json) if p.resolve() not in seen)
+    for path in paths:
         signals.extend(_scan_source_file(package_dir, path, analyst))
+    signals.extend(_coverage_gaps(package_dir, package_json))
     return signals

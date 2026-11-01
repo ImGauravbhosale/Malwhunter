@@ -1,0 +1,9 @@
+# The Detonation sandbox for Python packages: pip runs in here, so build
+# hooks, setup.py and import-time code execute exactly as they would for a
+# user. Same tools as the Node image (curl/wget so droppers work, strace for
+# the runtime trace, ca-certificates so HTTPS verifies against the proxy's
+# per-run CA), and an unprivileged user at uid 1000 like the Node image's.
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl wget strace \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 1000 sandbox

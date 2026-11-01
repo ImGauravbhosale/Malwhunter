@@ -107,3 +107,62 @@ def test_fetch_package_reputation_never_raises_on_registry_errors():
     rep = fetch_package_reputation("left-pad", "1.0.0", client=client)
     assert rep.age_days is None
     assert rep.downloads_last_month is None
+
+
+def _presence_client(status: int, body: dict | None = None, seen: list | None = None) -> httpx.Client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if seen is not None:
+            seen.append(request)
+        return httpx.Response(status, json=body or {})
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_presence_of_a_name_nobody_has_published():
+    from malwhunter.intake.registry import check_registry_presence
+
+    p = check_registry_presence("made-up-pkg", "1.0.0", client=_presence_client(404))
+    assert (p.name_exists, p.version_exists, p.security_holding) == (False, False, False)
+
+
+def test_presence_of_a_package_npm_security_took_down():
+    # Shape of flatmap-stream (the event-stream payload) on the live registry
+    from malwhunter.intake.registry import check_registry_presence
+
+    body = {"dist-tags": {"latest": "0.0.1-security"}, "versions": {"0.0.1-security": {}}}
+    p = check_registry_presence("flatmap-stream", "0.1.1", client=_presence_client(200, body))
+    assert (p.name_exists, p.version_exists, p.security_holding) == (True, False, True)
+
+
+def test_presence_of_a_real_package_with_a_missing_version():
+    from malwhunter.intake.registry import check_registry_presence
+
+    body = {"dist-tags": {"latest": "1.3.0"}, "versions": {"1.3.0": {}, "1.2.0": {}}}
+    p = check_registry_presence("left-pad", "9.9.9", client=_presence_client(200, body))
+    assert (p.name_exists, p.version_exists, p.security_holding) == (True, False, False)
+
+
+@pytest.mark.parametrize("status", [500, 503, 429])
+def test_presence_is_unknown_not_missing_when_the_registry_errors(status):
+    # An outage must never be reported as "this name is unclaimed"
+    from malwhunter.intake.registry import check_registry_presence
+
+    assert check_registry_presence("left-pad", "1.3.0", client=_presence_client(status)) is None
+
+
+def test_presence_asks_for_scoped_names_encoded_and_abbreviated():
+    from malwhunter.intake.registry import check_registry_presence
+
+    seen = []
+    check_registry_presence("@types/node", "1.0.0", client=_presence_client(404, seen=seen))
+    assert seen[0].url.raw_path.endswith(b"/@types%2fnode")
+    assert seen[0].headers["accept"] == "application/vnd.npm.install-v1+json"
+
+
+def test_fetch_error_carries_the_registry_status():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    with pytest.raises(PackageFetchError) as exc:
+        fetch_package_metadata("nope", "0.0.0", client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert exc.value.status_code == 404

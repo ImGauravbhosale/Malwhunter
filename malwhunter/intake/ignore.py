@@ -24,12 +24,15 @@ class IgnoreRule:
     reason: str
     version: str | None = None
     expires: date | None = None
+    ecosystem: str | None = None  # None: the rule applies in every ecosystem
 
     def is_expired(self, today: date) -> bool:
         return self.expires is not None and today > self.expires
 
-    def matches(self, package: str, version: str) -> bool:
+    def matches(self, package: str, version: str, ecosystem: str | None = None) -> bool:
         if self.package != package:
+            return False
+        if self.ecosystem is not None and ecosystem is not None and self.ecosystem != ecosystem:
             return False
         return self.version is None or self.version == version
 
@@ -56,7 +59,9 @@ def _parse_rule(raw: dict, index: int) -> IgnoreRule:
                 f"{IGNORE_FILENAME} rule #{index} ({package}): 'expires' must be YYYY-MM-DD, got {expires_raw!r}"
             ) from exc
 
-    return IgnoreRule(package=package, reason=reason, version=raw.get("version"), expires=expires)
+    return IgnoreRule(
+        package=package, reason=reason, version=raw.get("version"), expires=expires, ecosystem=raw.get("ecosystem")
+    )
 
 
 def load_ignore_rules(project_dir: Path) -> list[IgnoreRule]:
@@ -98,7 +103,8 @@ def apply_ignore_rules(
     used_rules: set[int] = set()
     for d in dossiers:
         for i, rule in enumerate(active):
-            if rule.matches(d.package, d.version):
+            eco = getattr(getattr(d, "ecosystem", None), "value", None)
+            if rule.matches(d.package, d.version, eco):
                 matched[d.dossier_key] = rule
                 used_rules.add(i)
                 break
