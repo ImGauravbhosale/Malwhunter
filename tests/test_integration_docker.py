@@ -66,3 +66,33 @@ def test_pip_install_of_a_malicious_sdist_runs_in_the_sandbox_and_is_caught(tmp_
     assert any(s.category == "canary-exfiltration" for s in signals)
     assert list(summary["scripts_run"]) == ["pip install", "import"]
     assert summary["exit_code"] == 0 and "evilpkg" in summary["stdout_tail"]
+
+
+def test_files_made_by_a_different_uid_can_still_be_cleaned_up(tmp_path):
+    """The failure CI hit: the sandbox user's uid is not the uid running the scan, so
+    what the install creates could not be deleted and the whole run raised."""
+    import os
+    import shutil
+    import subprocess
+
+    from malwhunter.chamber import runner
+
+    if os.getuid() == 0:
+        pytest.skip("root can delete anything, so there is nothing to reproduce")
+    runner._ensure_images()
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    os.chmod(scratch, 0o777)
+    other_uid = os.getuid() + 4321
+    made = subprocess.run(
+        ["docker", "run", "--rm", "--user", f"{other_uid}:{other_uid}", "-v", f"{scratch}:/s", runner.CONTAINER_IMAGE,
+         "sh", "-c", "umask 077; mkdir /s/private /s/pkg.egg-info; echo x > /s/private/f; echo y > /s/pkg.egg-info/f"],
+        capture_output=True, timeout=60,
+    )
+    assert made.returncode == 0, made.stderr
+    with pytest.raises(PermissionError):
+        shutil.rmtree(scratch)  # exactly what the unfixed code did at the end of every run
+
+    runner._reclaim_scratch(scratch, runner.CONTAINER_IMAGE)
+    shutil.rmtree(scratch)
+    assert not scratch.exists()

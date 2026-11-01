@@ -390,3 +390,25 @@ def test_scratch_copy_is_writable_by_the_unprivileged_sandbox_user(tmp_path, fak
     detonate_package("x", "1.0.0", package_dir, package_json)
 
     assert seen_modes == {"dir": 0o777, "exe": 0o777}
+
+
+def test_scratch_directory_is_handed_back_by_a_restricted_root_container(tmp_path, fake_docker):
+    package_dir, package_json = _package(tmp_path)
+    detonate_package("x", "1.0.0", package_dir, package_json)
+    reclaim = next(c for c in fake_docker["calls"] if c[:2] == ("run", "--rm") and "root" in c)
+    assert "--network" in reclaim and reclaim[reclaim.index("--network") + 1] == "none"
+    assert "--read-only" in reclaim and "--cap-drop=ALL" in reclaim
+    assert {"--cap-add=FOWNER", "--cap-add=DAC_OVERRIDE"} <= set(reclaim)
+    assert sum(1 for a in reclaim if a.startswith("--cap-add")) == 2  # nothing beyond what chmod needs
+    mount = reclaim[reclaim.index("-v") + 1]
+    assert mount.endswith(":/scratch") and "malwhunter-chamber-" in mount
+    script = reclaim[-1]
+    assert "-type d" in script and "-type f" in script and "-L" not in script  # never follows symlinks
+
+
+def test_the_scratch_directory_is_reclaimed_even_when_the_run_fails(tmp_path, fake_docker):
+    fake_docker["run_raises"] = RuntimeError("docker exploded")
+    package_dir, package_json = _package(tmp_path)
+    with pytest.raises(RuntimeError):
+        detonate_package("x", "1.0.0", package_dir, package_json)
+    assert any(c[:2] == ("run", "--rm") and "root" in c for c in fake_docker["calls"])

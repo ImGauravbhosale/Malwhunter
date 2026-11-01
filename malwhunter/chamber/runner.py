@@ -198,6 +198,36 @@ def _force_remove_container(container_name: str) -> None:
         pass
 
 
+def _reclaim_scratch(scratch: Path, image: str) -> None:
+    """Hands the scratch directory back to the user running the scan.
+
+    Whatever the install scripts create (a build folder, an `.egg-info`, a
+    deliberately private directory) is owned by the sandbox user's uid. When
+    that is not the uid running the scan (CI runners, other machines, any
+    account that is not uid 1000) the scan user cannot delete it, and the
+    cleanup that follows would raise, losing the whole result. A hostile
+    package could use that on purpose.
+
+    So a throwaway container, run as root with only the two capabilities
+    needed (override ownership and read/write permissions), opens up the
+    permissions of everything under the scratch directory. It touches only
+    regular files and directories (`find -type`, never following symlinks),
+    has no network, and mounts nothing but the scratch directory."""
+    try:
+        _docker(
+            "run", "--rm", "--network", "none", "--user", "root", "--read-only",
+            "--cap-drop=ALL", "--cap-add=FOWNER", "--cap-add=DAC_OVERRIDE", "--security-opt=no-new-privileges",
+            "--pids-limit=32", "--memory=128m",
+            "-v", f"{scratch}:/scratch",
+            image,
+            "sh", "-c",
+            "find /scratch -xdev -type d -exec chmod a+rwx {} + ; find /scratch -xdev -type f -exec chmod a+rw {} +",
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        pass  # best effort: the cleanup below tolerates what is left
+
+
 def _make_writable_by_sandbox_user(root: Path) -> None:
     """The scratch copy is owned by whoever runs the scan, but install
     scripts run as the container's unprivileged user and often write
@@ -567,7 +597,7 @@ def _run_detonation(
     networks = _SandboxNetworks(run_id)
     networks.create()
     try:
-        with tempfile.TemporaryDirectory(prefix="malwhunter-chamber-") as scratch:
+        with tempfile.TemporaryDirectory(prefix="malwhunter-chamber-", ignore_cleanup_errors=True) as scratch:
             capture_dir = Path(scratch) / "capture"
             capture_dir.mkdir()
             wiretap = _Wiretap(run_id, capture_dir, tls_inspect=tls_inspect)
@@ -604,6 +634,7 @@ def _run_detonation(
                     _force_remove_container(container_name)
             finally:
                 wiretap.stop()
+                _reclaim_scratch(Path(scratch), image)
             capture = wiretap.capture()
             tls_inspected = wiretap.ca_path is not None
             trace_result = parse_trace(name, trace_dir, proxy_port=WIRETAP_PORT) if trace_dir is not None else None
