@@ -16,6 +16,7 @@ LIFECYCLE_SCRIPT_NAMES = ("preinstall", "install", "postinstall")
 class DependencyRef:
     name: str
     version: str
+    ecosystem: str = "npm"
 
 
 def read_package_json(project_dir: Path) -> dict:
@@ -24,8 +25,15 @@ def read_package_json(project_dir: Path) -> dict:
 
 
 def get_lifecycle_scripts(package_json: dict) -> dict[str, str]:
+    # package.json comes from the package under analysis, so its shape is
+    # attacker-controlled: a non-object file or a non-string script must
+    # not be able to crash the scan (`"postinstall": 123`).
+    if not isinstance(package_json, dict):
+        return {}
     scripts = package_json.get("scripts", {})
-    return {name: scripts[name] for name in LIFECYCLE_SCRIPT_NAMES if name in scripts}
+    if not isinstance(scripts, dict):
+        return {}
+    return {name: scripts[name] for name in LIFECYCLE_SCRIPT_NAMES if isinstance(scripts.get(name), str)}
 
 
 def _name_from_node_modules_path(path: str) -> str | None:

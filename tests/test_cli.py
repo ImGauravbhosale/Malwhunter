@@ -221,3 +221,63 @@ def test_unavailable_detonation_is_explained_in_the_reason(tmp_path, monkeypatch
     )
     assert dossier.detonated is False
     assert "unavailable: Docker daemon is not reachable" in dossier.detonation_decision_reason
+
+
+def _analyze_missing(tmp_path, monkeypatch, presence, name="some-pkg", version="1.0.0"):
+    def not_found(*a, **k):
+        raise PackageFetchError(f"{name}@{version}: registry returned 404", status_code=404)
+
+    monkeypatch.setattr(cli, "fetch_tarball", not_found)
+    monkeypatch.setattr(cli, "check_registry_presence", lambda n, v: presence)
+    return _analyze(tmp_path, name=name, version=version)
+
+
+def _presence(name_exists, version_exists, security_holding):
+    from malwhunter.intake.registry import RegistryPresence
+
+    return RegistryPresence(url="https://registry.npmjs.org/x", name_exists=name_exists,
+                            version_exists=version_exists, security_holding=security_holding)
+
+
+def test_unclaimed_package_name_is_flagged_and_unscanned(tmp_path, monkeypatch):
+    dossier = _analyze_missing(tmp_path, monkeypatch, _presence(False, False, False), name="react-ai-helperz")
+    d = dossier.to_dict()
+    assert d["verdict"] == "unscanned"
+    assert "no package named 'react-ai-helperz'" in d["scan_error"]
+    assert [s["category"] for s in d["signals"]] == ["unclaimed-package-name"]
+    assert d["signals"][0]["severity"] == "high"
+
+
+def test_npm_security_takedown_is_malicious(tmp_path, monkeypatch):
+    dossier = _analyze_missing(tmp_path, monkeypatch, _presence(True, False, True), name="flatmap-stream", version="0.1.1")
+    d = dossier.to_dict()
+    assert d["verdict"] == "malicious"
+    assert d["scan_error"] is None
+    assert [s["category"] for s in d["signals"]] == ["npm-security-takedown"]
+
+
+def test_missing_version_of_a_real_package_is_unscanned_with_a_reason(tmp_path, monkeypatch):
+    dossier = _analyze_missing(tmp_path, monkeypatch, _presence(True, False, False), name="left-pad", version="9.9.9")
+    d = dossier.to_dict()
+    assert d["verdict"] == "unscanned"
+    assert "not on the registry" in d["scan_error"]
+    assert d["signals"] == []
+
+
+def test_unknown_presence_falls_back_to_generic_unscanned(tmp_path, monkeypatch):
+    dossier = _analyze_missing(tmp_path, monkeypatch, None)
+    assert dossier.to_dict()["verdict"] == "unscanned"
+    assert dossier.scan_error.startswith("could not fetch/extract")
+    assert dossier.signals == []
+
+
+def test_presence_is_only_checked_after_a_404(tmp_path, monkeypatch):
+    def outage(*a, **k):
+        raise PackageFetchError("x@1.0.0: registry returned 503", status_code=503)
+
+    def must_not_check(*a, **k):
+        raise AssertionError("an outage says nothing about whether the name exists")
+
+    monkeypatch.setattr(cli, "fetch_tarball", outage)
+    monkeypatch.setattr(cli, "check_registry_presence", must_not_check)
+    assert _analyze(tmp_path, name="x", version="1.0.0").to_dict()["verdict"] == "unscanned"

@@ -12,6 +12,6 @@
 # found by live-testing through the Wiretap proxy. A dropper fetching its
 # payload over HTTPS would fail before running it, and we'd only ever see
 # the connection, never what the payload does.
-FROM node:20-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl wget \
+FROM node:22-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl wget strace \
     && rm -rf /var/lib/apt/lists/*
