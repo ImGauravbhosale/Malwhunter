@@ -159,9 +159,9 @@ def _logo(width: int) -> list[str]:
         margin = max((width - span) // 2, 0)
 
     pillars = (
-        f"{_GREEN}●{_RESET} static analysis   {_YELLOW}●{_RESET} detonation   {_MAGENTA}●{_RESET} AI-agent review"
+        f"{_GREEN}●{_RESET} static analysis   {_YELLOW}●{_RESET} detonation   {_MAGENTA}●{_RESET} verifiable evidence"
     )
-    pillars_len = len("● static analysis   ● detonation   ● AI-agent review")
+    pillars_len = len("● static analysis   ● detonation   ● verifiable evidence")
     version = f"v{_version()}"
     gap = max(span - pillars_len - len(version), 3)
     return [
@@ -188,15 +188,16 @@ LOCAL_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("One package (npm: name@version, PyPI: pypi:name==version)",
      ("malwhunter inspect left-pad@1.3.0 --mode full",
       "malwhunter inspect pypi:requests==2.31.0 --mode static")),
-    ("Write a brief to paste into any AI agent for a second opinion",
-     ("malwhunter scan . --mode static --format agent-prompt --out review.md",)),
+    ("Optional extras (off unless you ask): a brief to paste into any AI agent, or an AI second opinion",
+     ("malwhunter scan . --mode static --format agent-prompt --out review.md",
+      "malwhunter scan . --mode static --ai")),
 )
 CI_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Full scan: every dependency, nothing remembered between runs",
-     ("malwhunter scan . --mode full --fail-on malicious --no-ai --jobs 4 \\",
+     ("malwhunter scan . --mode full --fail-on malicious --jobs 4 \\",
       "  --format json --out malwhunter-report.json")),
     ("Delta scan: only new or changed packages (persist the cache folder)",
-     ("malwhunter scan . --mode auto --fail-on malicious --no-ai --jobs 4 \\",
+     ("malwhunter scan . --mode auto --fail-on malicious --jobs 4 \\",
       "  --cache-dir .malwhunter-cache --format json --out malwhunter-report.json")),
 )
 

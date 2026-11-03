@@ -45,8 +45,10 @@ from malwhunter.recon.context import collect_code_context
 from malwhunter.recon.python_scanner import run_python_recon
 from malwhunter.recon.scanner import drop_established_typosquats, run_recon, scan_typosquat
 from malwhunter.report.agent_prompt import dossiers_to_agent_prompt, write_agent_prompt
+from malwhunter.report.csv_report import dossiers_to_csv_str, write_csv_report
 from malwhunter.report.json_report import dossiers_to_json_str, write_json_report
 from malwhunter.report.markdown import dossiers_to_markdown, write_markdown_report
+from malwhunter.report.sarif import dossiers_to_sarif_str, find_manifest_uri, write_sarif_report
 from malwhunter.report.terminal import (
     analyzing_line,
     done_line,
@@ -82,7 +84,7 @@ def _select_analyst(use_ai: bool) -> Analyst | None:
 
     if shutil.which("claude") is None:
         click.echo(
-            "malwhunter: `claude` not found on PATH — ambiguous Recon findings won't get a second look.",
+            "malwhunter: --ai needs the `claude` CLI on PATH; continuing without the AI second opinion.",
             err=True,
         )
         return None
@@ -418,6 +420,15 @@ def _render_and_exit(
         if out_path:
             with open(out_path, "w", encoding="utf-8") as fh:
                 fh.write(rendered)
+    elif output_format == "csv":
+        rendered = dossiers_to_csv_str(dossiers)
+        if out_path:
+            write_csv_report(dossiers, out_path)
+    elif output_format == "sarif":
+        manifest_uri = find_manifest_uri(target) if Path(target).is_dir() else "package-lock.json"
+        rendered = dossiers_to_sarif_str(dossiers, manifest_uri)
+        if out_path:
+            write_sarif_report(dossiers, out_path, manifest_uri)
     elif output_format == "agent-prompt":
         rendered = dossiers_to_agent_prompt(dossiers, target)
         if out_path:
@@ -550,9 +561,9 @@ def _resolve_detonate_mode(no_detonate: bool, always_detonate: bool, mode: str |
 @click.argument("path", type=click.Path(exists=True, file_okay=False))
 @click.option(
     "--format", "output_format",
-    type=click.Choice(["json", "markdown", "terminal", "agent-prompt"]),
+    type=click.Choice(["json", "markdown", "terminal", "agent-prompt", "sarif", "csv"]),
     default="json",
-    help="agent-prompt writes a review brief you can paste into any AI agent for a manual second opinion.",
+    help="csv writes one row per finding for spreadsheets. sarif writes SARIF 2.1.0 for GitHub code scanning and IDEs. agent-prompt writes a review brief you can paste into any AI agent for a manual second opinion.",
 )
 @click.option("--out", "out_path", type=click.Path(), default=None, help="Write report to this file instead of stdout.")
 @_detonate_options
@@ -564,9 +575,8 @@ def _resolve_detonate_mode(no_detonate: bool, always_detonate: bool, mode: str |
 )
 @click.option(
     "--ai/--no-ai",
-    default=True,
-    help="Let the Analyst review genuinely ambiguous Recon findings. Falls back to "
-    "Recon-only if `claude` isn't on PATH.",
+    default=False,
+    help="Optional AI second opinion on encoded strings the rules cannot read (uses your own `claude` CLI). Off by default: nothing else in MalwHunter depends on it.",
 )
 @click.option("--jobs", type=click.IntRange(1, 16), default=1, show_default=True,
               help="Analyze this many packages at once. Container runs still happen one at a time.")
@@ -679,13 +689,17 @@ def scan(
 @click.argument("spec")
 @click.option(
     "--format", "output_format",
-    type=click.Choice(["json", "markdown", "terminal", "agent-prompt"]),
+    type=click.Choice(["json", "markdown", "terminal", "agent-prompt", "sarif", "csv"]),
     default="terminal",
-    help="agent-prompt prints a review brief you can paste into any AI agent for a manual second opinion.",
+    help="csv prints one row per finding for spreadsheets. sarif prints SARIF 2.1.0 for GitHub code scanning and IDEs. agent-prompt prints a review brief you can paste into any AI agent for a manual second opinion.",
 )
 @click.option("--out", "out_path", type=click.Path(), default=None, help="Write report to this file instead of stdout.")
 @_detonate_options
-@click.option("--ai/--no-ai", default=True)
+@click.option(
+    "--ai/--no-ai",
+    default=False,
+    help="Optional AI second opinion on encoded strings the rules cannot read (uses your own `claude` CLI). Off by default: nothing else in MalwHunter depends on it.",
+)
 def inspect(
     spec: str,
     output_format: str,

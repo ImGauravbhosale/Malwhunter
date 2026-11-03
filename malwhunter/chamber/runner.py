@@ -33,7 +33,7 @@ from malwhunter.chamber.trace import TRACE_DIR_IN_CONTAINER, WRAPPER, Trace, par
 from malwhunter.dossier.model import Evidence, Severity, Signal, SignalSource, signal_id
 from malwhunter.intake.manifest import get_lifecycle_scripts
 from malwhunter.report.sanitize import sanitize_text
-from malwhunter.wiretap.canary import find_leaked_canaries, generate_canaries
+from malwhunter.wiretap.canary import find_leaked_canaries, generate_canaries, generate_honeyfiles
 from malwhunter.wiretap.proxy import CapturedBlocked, CapturedConnect, CapturedHttpRequest
 
 _DOCKERFILE_DIR = Path(__file__).parent
@@ -53,7 +53,7 @@ def _content_tag(repo: str, context_dir: Path, files: tuple[str, ...]) -> str:
 
 CONTAINER_IMAGE = _content_tag("malwhunter-sandbox", _DOCKERFILE_DIR, ("Dockerfile",))
 PYTHON_IMAGE = _content_tag("malwhunter-sandbox-py", _DOCKERFILE_DIR, ("Dockerfile.python",))
-WIRETAP_IMAGE = _content_tag("malwhunter-wiretap", _WIRETAP_DOCKERFILE_DIR, ("Dockerfile", "proxy.py", "serve.py", "tls_intercept.py"))
+WIRETAP_IMAGE = _content_tag("malwhunter-wiretap", _WIRETAP_DOCKERFILE_DIR, ("Dockerfile", "requirements.txt", "proxy.py", "serve.py", "tls_intercept.py"))
 CONTAINER_TIMEOUT_SECONDS = 30
 # pip has to download its build backend through the proxy before it builds anything
 PYTHON_TIMEOUT_SECONDS = 120
@@ -66,6 +66,8 @@ WIRETAP_ALIAS = "wiretap"
 WIRETAP_PORT = 8080
 WIRETAP_READY_TIMEOUT_SECONDS = 15
 CA_MOUNT_PATH = "/etc/malwhunter/ca.pem"
+# the sandbox user's home: a writable tmpfs, since the image's own home is read-only
+SANDBOX_HOME = "/tmp"  # nosec B108
 
 # Destinations a legitimate install commonly needs — anything else is
 # flagged as "unexpected," not "confirmed malicious": plenty of real
@@ -337,6 +339,7 @@ def _build_docker_command(
     image: str = CONTAINER_IMAGE,
     user: str = CONTAINER_USER,
     extra_env: dict[str, str] | None = None,
+    honey_mounts: tuple[tuple[Path, str], ...] = (),
 ) -> list[str]:
     proxy_url = f"http://{WIRETAP_ALIAS}:{WIRETAP_PORT}"
     cmd = [
@@ -381,9 +384,11 @@ def _build_docker_command(
         "--user", user,
         # the image's real HOME is on the read-only root fs; npm and
         # friends need somewhere writable for caches and config
-        "-e", "HOME=/tmp",
+        "-e", f"HOME={SANDBOX_HOME}",
         "-v", f"{scratch_path}:/pkg",
         *(["-v", f"{ca_path}:{CA_MOUNT_PATH}:ro"] if ca_path is not None else []),
+        # fake credential files, read-only, at the paths a stealer looks in
+        *[arg for host, inside in honey_mounts for arg in ("-v", f"{host}:{inside}:ro")],
         *(["-v", f"{trace_dir}:{TRACE_DIR_IN_CONTAINER}"] if trace_dir is not None else []),
         "-w", "/pkg",
         image,
@@ -583,7 +588,10 @@ def _run_detonation(
     if python:
         _ensure_python_image()
 
-    canaries = generate_canaries()
+    env_canaries = generate_canaries()
+    honeyfiles = generate_honeyfiles()
+    # everything that must never be seen leaving the sandbox: the env vars and the file contents
+    canaries = {**env_canaries, **{h.name: h.canary for h in honeyfiles}}
     run_id = secrets.token_hex(6)
     container_name = f"malwhunter-chamber-{run_id}"
     exit_code: int | None = None
@@ -613,11 +621,21 @@ def _run_detonation(
                     # the sandbox user must be able to write the log; its parent is a private mkdtemp dir
                     os.chmod(trace_dir, 0o777)  # nosec B103
 
+                honey_dir = Path(scratch) / "honey"
+                honey_mounts = []
+                for h in honeyfiles:
+                    host_file = honey_dir / h.path
+                    host_file.parent.mkdir(parents=True, exist_ok=True)
+                    host_file.write_text(h.content, encoding="utf-8")
+                    os.chmod(host_file, 0o644)  # nosec B103  # readable by the sandbox user; parent dir is private
+                    honey_mounts.append((host_file, f"{SANDBOX_HOME}/{h.path}"))
+
                 docker_cmd = _build_docker_command(
-                    scratch_path, canaries, script_chain, network=networks.sandbox, container_name=container_name,
+                    scratch_path, env_canaries, script_chain, network=networks.sandbox, container_name=container_name,
                     ca_path=wiretap.ca_path, trace_dir=trace_dir,
                     image=image, user=user,
                     extra_env={"PIP_DISABLE_PIP_VERSION_CHECK": "1", "PYTHONDONTWRITEBYTECODE": "1"} if python else None,
+                    honey_mounts=tuple(honey_mounts),
                 )
                 try:
                     # list form, no shell=True; args are our own flags plus a scratch copy of the
