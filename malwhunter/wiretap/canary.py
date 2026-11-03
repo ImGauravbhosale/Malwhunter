@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import secrets
+from dataclasses import dataclass
 from urllib.parse import quote
 
 CANARY_ENV_VAR_NAMES = (
@@ -52,3 +53,43 @@ def _variants(value: str) -> tuple[str, ...]:
 
 def find_leaked_canaries(haystack: str, canaries: dict[str, str]) -> list[str]:
     return [name for name, value in canaries.items() if any(v in haystack for v in _variants(value))]
+
+
+@dataclass(frozen=True)
+class Honeyfile:
+    """A fake credential file planted in the sandbox's home directory.
+    `name` is how reports refer to it ("~/.npmrc"); `path` is relative to
+    the home directory; `canary` is the unique value inside `content`."""
+
+    name: str
+    path: str
+    content: str
+    canary: str
+
+
+# Each file is shaped like the real thing so a stealer's parser accepts it.
+# The npm token is scoped to a host that never resolves: npm sends a scoped
+# token only to that host, so a normal install never transmits it and any
+# sighting of it on the wire is theft.
+_HONEYFILE_TEMPLATES = (
+    ("~/.npmrc", ".npmrc", "//registry.mh-canary.invalid/:_authToken={canary}\n"),
+    (
+        "~/.aws/credentials",
+        ".aws/credentials",
+        "[default]\naws_access_key_id = AKIAIOSFODNN7EXAMPLE\naws_secret_access_key = {canary}\n",
+    ),
+    (
+        "~/.ssh/id_rsa",
+        ".ssh/id_rsa",
+        "-----BEGIN OPENSSH PRIVATE KEY-----\n{canary}\n-----END OPENSSH PRIVATE KEY-----\n",
+    ),
+    ("~/.pypirc", ".pypirc", "[pypi]\nusername = __token__\npassword = {canary}\n"),
+)
+
+
+def generate_honeyfiles() -> list[Honeyfile]:
+    files = []
+    for name, path, template in _HONEYFILE_TEMPLATES:
+        canary = f"canary_{secrets.token_hex(16)}"
+        files.append(Honeyfile(name, path, template.format(canary=canary), canary))
+    return files

@@ -75,7 +75,7 @@ def test_extract_tarball_refuses_path_traversal(tmp_path: Path):
 
 def _mock_reputation_client(time_doc: dict | None, downloads_doc: dict | None, *, time_status=200, downloads_status=200) -> httpx.Client:
     def handler(request: httpx.Request) -> httpx.Response:
-        if "api.npmjs.org" in str(request.url):
+        if request.url.host == "api.npmjs.org":
             if downloads_status != 200:
                 return httpx.Response(downloads_status)
             return httpx.Response(200, json=downloads_doc)

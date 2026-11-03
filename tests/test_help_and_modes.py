@@ -39,7 +39,8 @@ def test_ci_part_has_a_full_scan_and_a_delta_scan():
     ci = _text([])
     ci = ci[ci.index("RUNNING IN CI/CD"):]
     full, delta = ci.index("--mode full"), ci.index("--cache-dir")
-    assert full < delta and "--fail-on" in ci and "--no-ai" in ci  # CI runners have no `claude` session
+    assert full < delta and "--fail-on" in ci
+    assert "--ai" not in ci and "--no-ai" not in ci  # AI is off unless asked, so CI needs no flag for it
 
 
 def test_help_is_plain_text_when_piped():
@@ -218,7 +219,8 @@ def test_under_the_logo_come_the_three_pillars_the_version_and_the_tagline(monke
     out = _text([])
     lines = out.splitlines()
     pillars = next(i for i, ln in enumerate(lines) if "static analysis" in ln)
-    assert "detonation" in lines[pillars] and "AI-agent review" in lines[pillars]
+    assert "detonation" in lines[pillars] and "verifiable evidence" in lines[pillars]
+    assert "AI" not in lines[pillars]  # AI is a side dish, not one of the headline features
     assert lines[pillars].rstrip().endswith(f"v{_version()}")  # the version sits at the right edge
     assert lines[pillars + 1].strip() == "Hunts the malware hiding in your dependencies"  # the tagline right below
     assert max(i for i, ln in enumerate(lines) if "█" in ln) < pillars  # all under the art, none above it
@@ -281,3 +283,51 @@ def test_version_falls_back_instead_of_breaking_the_first_screen(monkeypatch):
 
     monkeypatch.setattr(importlib.metadata, "version", missing)
     assert _version() == "dev"
+
+
+# ---------- AI is a side dish: off unless you ask for it ----------
+
+def test_ai_is_off_by_default_for_scan_and_inspect():
+    for name in ("scan", "inspect"):
+        param = next(p for p in cli.cli.commands[name].params if p.name == "ai")
+        assert param.default is False, name
+
+
+def test_default_runs_never_start_the_ai_helper(tmp_path, monkeypatch):
+    package_dir = tmp_path / "pkgsrc"
+    package_dir.mkdir()
+    (package_dir / "package.json").write_text(json.dumps({"name": "x"}))
+    (package_dir / "index.js").write_text("module.exports = 1;\n")
+    monkeypatch.setattr(cli, "fetch_tarball", lambda *a, **k: tmp_path / "x.tgz")
+    monkeypatch.setattr(cli, "extract_tarball", lambda *a, **k: package_dir)
+    monkeypatch.setattr(cli, "fetch_package_reputation", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "Analyst", lambda *a, **k: pytest.fail("the AI helper must not start unless --ai is given"))
+    result = CliRunner().invoke(cli.cli, ["inspect", "x@1.0.0", "--mode", "static", "--format", "json"])
+    assert result.exit_code == 0, result.output
+
+
+def test_no_ai_flag_is_still_accepted_for_old_scripts():
+    result = CliRunner().invoke(cli.cli, ["inspect", "--help"])
+    assert "--ai / --no-ai" in result.output and "Off by default" in result.output
+
+
+def test_asking_for_ai_without_the_claude_cli_carries_on_without_it(monkeypatch, capsys):
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    assert cli._select_analyst(True) is None
+    assert "--ai needs the `claude` CLI" in capsys.readouterr().err
+    assert cli._select_analyst(False) is None
+
+
+def test_ai_flag_creates_the_helper_only_when_claude_exists(monkeypatch):
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda _name: "/usr/bin/claude")
+    assert isinstance(cli._select_analyst(True), cli.Analyst)
+
+
+def test_help_shows_ai_only_as_an_optional_extra():
+    out = _text([])
+    ai_lines = [ln for ln in out.splitlines() if "AI" in ln or "--ai" in ln]
+    assert ai_lines and all("Optional" in ln or "malwhunter scan" in ln or "paste into any AI" in ln for ln in ai_lines)

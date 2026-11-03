@@ -55,15 +55,19 @@ def resolve_dependencies(project_dir: Path) -> list[DependencyRef]:
     lock_path = project_dir / "package-lock.json"
     if lock_path.exists():
         lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        if not isinstance(lock, dict):
+            raise ValueError("package-lock.json must be a JSON object")
         packages = lock.get("packages")
+        if packages is not None and not isinstance(packages, dict):
+            raise ValueError("package-lock.json: 'packages' must be an object")
         if packages is not None:
             refs: list[DependencyRef] = []
             for path, info in packages.items():
-                if path == "":
-                    continue  # the root project itself
+                if path == "" or not isinstance(info, dict):
+                    continue  # the root project itself, or an entry that is not a package record
                 name = info.get("name") or _name_from_node_modules_path(path)
                 version = info.get("version")
-                if name and version:
+                if isinstance(name, str) and isinstance(version, str) and name and version:
                     refs.append(DependencyRef(name=name, version=version))
             # de-dupe (a package can appear multiple times if nested at
             # different depths, usually pinned to the same version)

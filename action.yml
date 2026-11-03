@@ -1,8 +1,8 @@
 name: "MalwHunter Dependency Scan"
 description: >-
-  Hunts for malware deliberately hidden in npm dependencies — static
-  Recon + an AI second opinion + sandboxed Detonation with canary
-  tripwires — and fails the job on a real finding.
+  Hunts for malware deliberately hidden in npm and PyPI dependencies —
+  static analysis + sandboxed detonation with fake-secret tripwires —
+  and fails the job on a real finding. AI is optional and off by default.
 author: "Gaurav Bhosale"
 branding:
   icon: "shield"
@@ -23,13 +23,13 @@ inputs:
     default: "smart"
   ai:
     description: >-
-      Let the Analyst review ambiguous findings. Needs an authenticated
-      `claude` CLI session, which most CI runners don't have — defaults
-      off so the scan degrades intentionally, not silently.
+      Optional AI second opinion on encoded strings the rules cannot read.
+      Needs an authenticated `claude` CLI session, which most CI runners
+      don't have. Off by default; nothing else depends on it.
     required: false
     default: "false"
   format:
-    description: "Report format: json, markdown, terminal"
+    description: "Report format: json, markdown, terminal, csv, sarif"
     required: false
     default: "json"
 
@@ -45,7 +45,7 @@ runs:
   using: "composite"
   steps:
     - name: Install uv
-      uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+      uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
       with:
         python-version: "3.12"
 

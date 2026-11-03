@@ -156,3 +156,22 @@ async def test_connect_to_internal_destinations_is_refused(target):
 )
 def test_is_public_address(address, public):
     assert is_public_address(address) is public
+
+
+def test_honeyfiles_have_unique_canaries_inside_their_content():
+    from malwhunter.wiretap.canary import generate_honeyfiles
+
+    files = generate_honeyfiles()
+    assert {f.name for f in files} == {"~/.npmrc", "~/.aws/credentials", "~/.ssh/id_rsa", "~/.pypirc"}
+    assert len({f.canary for f in files}) == len(files)
+    assert all(f.canary in f.content for f in files)
+
+
+def test_whole_honeyfile_leaked_base64_is_detected():
+    import base64
+
+    from malwhunter.wiretap.canary import generate_honeyfiles
+
+    for f in generate_honeyfiles():
+        blob = base64.b64encode(f.content.encode()).decode()
+        assert find_leaked_canaries(blob, {f.name: f.canary}) == [f.name]

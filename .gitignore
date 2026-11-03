@@ -14,3 +14,6 @@ wheels/
 
 # macOS
 .DS_Store
+
+# Hypothesis fuzz-test example database
+.hypothesis/

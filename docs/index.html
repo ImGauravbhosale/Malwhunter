@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MalwHunter</title>
-<meta name="description" content="MalwHunter hunts for malware deliberately hidden inside your npm dependencies — static Recon, an AI Analyst, and a sandboxed Detonation pass.">
+<meta name="description" content="MalwHunter hunts for malware deliberately hidden inside your dependencies (npm and PyPI): static code analysis, a sandboxed detonation, and an AI-agent review brief.">
 <style>
   :root {
     --bg: #f7faf9;
@@ -152,7 +152,7 @@
 
 <header class="hero">
   <div class="shell">
-    <span class="kicker">Open source · npm supply-chain security</span>
+    <span class="kicker">Open source · npm + PyPI supply-chain security</span>
     <h1 class="title">MalwHunter</h1>
     <p class="tagline">
       Hunts for malware deliberately hidden inside your dependencies — before it's
@@ -160,8 +160,9 @@
     </p>
     <div class="cta-row">
       <a class="btn primary" href="https://github.com/ImGauravbhosale/Malwhunter">View on GitHub</a>
+      <a class="btn ghost" href="#start">Quick start</a>
       <a class="btn ghost" href="#how-it-works">How it works</a>
-      <a class="btn ghost" href="#cli">CLI reference</a>
+      <a class="btn ghost" href="#cli">Commands</a>
     </div>
   </div>
 </header>
@@ -169,10 +170,12 @@
 <nav class="toc">
   <div class="shell">
     <a href="#why">Why</a>
+    <a href="#start">Quick start</a>
     <a href="#how-it-works">How it works</a>
-    <a href="#cli">CLI</a>
+    <a href="#cli">Commands</a>
     <a href="#architecture">Architecture</a>
-    <a href="#status">Status &amp; roadmap</a>
+    <a href="#limits">Limits</a>
+    <a href="#status">Status</a>
   </div>
 </nav>
 
@@ -203,17 +206,46 @@
   </div>
 </section>
 
+<section id="start">
+  <div class="shell">
+    <h2>Quick start</h2>
+    <p class="section-lede">Three ways to check a package. Pick one, or combine them.</p>
+    <div class="thesis-grid">
+      <div class="card yes">
+        <h3>1. Static analysis</h3>
+        <p>Reads the code and runs nothing. Fast, and needs no Docker.<br><code>--mode static</code></p>
+      </div>
+      <div class="card yes">
+        <h3>2. Detonation</h3>
+        <p>Runs the install script in a locked-down sandbox and reports what it did: hosts contacted, files touched, secrets sent. Needs Docker.<br><code>--mode detonate-only</code> or <code>--mode full</code> (both)</p>
+      </div>
+      <div class="card yes">
+        <h3>3. AI-agent review</h3>
+        <p>Writes a brief you paste into Claude, ChatGPT or Gemini to check the findings yourself.<br><code>--format agent-prompt --out review.md</code></p>
+      </div>
+      <div class="card no">
+        <h3>Not sure? Use the default</h3>
+        <p>Static analysis on everything, sandbox only for packages that are new, obscure or already flagged.<br><code>--mode auto</code></p>
+      </div>
+    </div>
+    <pre><code>git clone https://github.com/ImGauravbhosale/Malwhunter.git
+cd Malwhunter &amp;&amp; uv sync
+uv run malwhunter                       # the logo and every command
+uv run malwhunter scan . --mode static</code></pre>
+  </div>
+</section>
+
 <section id="how-it-works">
   <div class="shell">
     <h2>How it works</h2>
     <p class="section-lede">
-      Two independent passes feed one artifact — the <strong>Dossier</strong>, one per exact
+      Code reading and a sandbox run feed one artifact — the <strong>Dossier</strong>, one per exact
       <code>package@version</code>, cacheable across every project that depends on it.
     </p>
 
     <figure>
       <div class="diagram-frame">
-        <svg class="diagram" viewBox="0 0 900 900" role="img" aria-label="A package tarball splits into two independent passes: Recon, a deterministic static catalog with an AI Analyst for ambiguous blobs, and Detonation, a sandboxed dynamic run with a Wiretap recording proxy and canary tripwires. Both feed into the Dossier, which resolves through deterministic verdict combination into clean, suspicious, or malicious.">
+        <svg class="diagram" viewBox="0 0 900 900" role="img" aria-label="An npm or PyPI package is read by static analysis, with an optional AI second opinion for blobs it cannot read, and run in a sandbox with a recording proxy that reads HTTPS, fake secrets and a syscall trace. Both feed the Dossier, which resolves through fixed verdict rules into clean, suspicious or malicious.">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0,0 L10,5 L0,10 z" fill="currentColor"></path>
@@ -222,24 +254,24 @@
 
           <!-- Package Tarball -->
           <rect x="300" y="20" width="300" height="44" rx="22" fill="none" stroke="var(--ink-dim)" stroke-width="1.4"></rect>
-          <text x="450" y="47" text-anchor="middle" font-size="13" font-weight="600">Package Tarball</text>
+          <text x="450" y="47" text-anchor="middle" font-size="13" font-weight="600">npm / PyPI package</text>
 
           <line x1="420" y1="64" x2="260" y2="128" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
-          <text x="270" y="100" class="arrow-label">unpack, inspect</text>
+          <text x="270" y="100" class="arrow-label">read the code</text>
           <line x1="480" y1="64" x2="640" y2="128" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
-          <text x="560" y="100" class="arrow-label">run install scripts</text>
+          <text x="560" y="100" class="arrow-label">run install + import</text>
 
           <!-- Recon -->
           <rect x="90" y="130" width="280" height="108" rx="14" fill="var(--panel)" stroke="var(--green)" stroke-width="1.6"></rect>
           <text x="230" y="168" text-anchor="middle" font-size="15" font-weight="700">RECON</text>
-          <text x="230" y="190" text-anchor="middle" font-size="11" class="dim">static, deterministic</text>
-          <text x="230" y="210" text-anchor="middle" font-size="11" class="dim">shell abuse · eval · entropy · typosquat</text>
+          <text x="230" y="190" text-anchor="middle" font-size="11" class="dim">static analysis, nothing is run</text>
+          <text x="230" y="210" text-anchor="middle" font-size="11" class="dim">code read as syntax trees · typosquats</text>
 
           <!-- Detonation -->
           <rect x="530" y="130" width="280" height="108" rx="14" fill="var(--panel)" stroke="var(--red)" stroke-width="1.6"></rect>
           <text x="670" y="168" text-anchor="middle" font-size="15" font-weight="700">DETONATION</text>
           <text x="670" y="190" text-anchor="middle" font-size="11" class="dim">sandboxed, single-use container</text>
-          <text x="670" y="210" text-anchor="middle" font-size="11" class="dim">read-only fs · cap-drop=ALL · timeout</text>
+          <text x="670" y="210" text-anchor="middle" font-size="11" class="dim">fake secrets + files · HTTPS · syscalls</text>
 
           <line x1="230" y1="238" x2="230" y2="270" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
           <text x="246" y="258" class="arrow-label">ambiguous blob</text>
@@ -249,14 +281,14 @@
           <!-- Analyst -->
           <rect x="90" y="270" width="280" height="86" rx="12" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.4"></rect>
           <text x="230" y="300" text-anchor="middle" font-size="13" font-weight="700" fill="var(--accent)">ANALYST</text>
-          <text x="230" y="320" text-anchor="middle" font-size="10.5" class="dim">2 AI passes, second opinion</text>
-          <text x="230" y="338" text-anchor="middle" font-size="10.5" class="dim">decodes what regex only flags</text>
+          <text x="230" y="320" text-anchor="middle" font-size="10.5" class="dim">2 AI passes, optional</text>
+          <text x="230" y="338" text-anchor="middle" font-size="10.5" class="dim">decodes what rules only flag</text>
 
           <!-- Wiretap -->
           <rect x="530" y="270" width="280" height="86" rx="12" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.4"></rect>
           <text x="670" y="300" text-anchor="middle" font-size="13" font-weight="700" fill="var(--accent)">WIRETAP</text>
-          <text x="670" y="320" text-anchor="middle" font-size="10.5" class="dim">recording proxy + canary tripwires</text>
-          <text x="670" y="338" text-anchor="middle" font-size="10.5" class="dim">lets traffic complete, logs everything</text>
+          <text x="670" y="320" text-anchor="middle" font-size="10.5" class="dim">recording proxy that reads HTTPS</text>
+          <text x="670" y="338" text-anchor="middle" font-size="10.5" class="dim">fake-secret tripwires, logs everything</text>
 
           <line x1="270" y1="356" x2="410" y2="450" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
           <line x1="630" y1="356" x2="490" y2="450" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
@@ -271,7 +303,7 @@
           <!-- Verdict Combination -->
           <rect x="300" y="650" width="300" height="90" rx="14" fill="var(--panel)" stroke="var(--border)" stroke-width="1.4"></rect>
           <text x="450" y="686" text-anchor="middle" font-size="14" font-weight="700">VERDICT COMBINATION</text>
-          <text x="450" y="708" text-anchor="middle" font-size="11" class="dim">deterministic rules, no reputation lookup</text>
+          <text x="450" y="708" text-anchor="middle" font-size="11" class="dim">fixed rules, no reputation lookup</text>
           <text x="450" y="726" text-anchor="middle" font-size="11" class="dim">canary alone, or two sources agreeing</text>
 
           <line x1="380" y1="740" x2="220" y2="790" stroke="var(--ink-dim)" stroke-width="1.4" marker-end="url(#arrow)"></line>
@@ -288,69 +320,107 @@
           <text x="680" y="826" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">MALICIOUS</text>
         </svg>
       </div>
-      <figcaption>Recon and Detonation run independently — Analyst and Wiretap are how each one handles what it alone can't resolve — and both converge on the same Dossier.</figcaption>
+      <figcaption>Static analysis and the sandbox run on their own (the AI second opinion and the recording proxy help each one with what it alone can't resolve), and both converge on the same Dossier. <code>--mode</code> picks which of them run.</figcaption>
     </figure>
   </div>
 </section>
 
 <section id="cli">
   <div class="shell">
-    <h2>CLI reference</h2>
-    <pre><code>uv sync
-uv run malwhunter inspect left-pad@1.3.0</code></pre>
+    <h2>Commands</h2>
+    <p class="section-lede">Run <code>malwhunter</code> with no arguments to see this list in your terminal, with the logo.</p>
 
+    <h3>On your machine</h3>
+<pre><code>malwhunter scan . --mode static                  # read the code only (no Docker)
+malwhunter scan . --mode detonate-only           # sandbox only (needs Docker)
+malwhunter scan . --mode full                    # both, all in one
+malwhunter inspect left-pad@1.3.0 --mode full    # one npm package
+malwhunter inspect pypi:requests==2.31.0         # one PyPI package
+malwhunter scan . --format agent-prompt --out review.md   # brief for an AI agent</code></pre>
+
+    <h3>In CI/CD</h3>
+<pre><code># Full scan: every dependency, nothing remembered between runs
+malwhunter scan . --mode full --fail-on malicious --jobs 4 \
+  --format json --out malwhunter-report.json
+
+# Delta scan: only new or changed packages (keep the cache folder between runs)
+malwhunter scan . --mode auto --fail-on malicious --jobs 4 \
+  --cache-dir .malwhunter-cache --format json --out malwhunter-report.json</code></pre>
+
+    <h3>Options</h3>
     <table>
-      <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+      <thead><tr><th>Option</th><th>What it does</th></tr></thead>
       <tbody>
-        <tr><td><code>malwhunter scan .</code></td><td>Resolve the project's package.json/lockfile and hunt every dependency.</td></tr>
-        <tr><td><code>malwhunter scan . --no-detonate</code></td><td>Recon + Analyst only — no Docker needed, much faster.</td></tr>
-        <tr><td><code>malwhunter inspect &lt;name&gt;@&lt;version&gt;</code></td><td>Deep-dive a single package.</td></tr>
-        <tr><td><code>--format json|markdown|terminal</code></td><td>Output format — terminal is colorized ANSI.</td></tr>
-        <tr><td><code>--fail-on malicious|suspicious|none</code></td><td>Exit 1 if any package reaches this verdict level or worse (default: malicious).</td></tr>
-        <tr><td><code>--ai / --no-ai</code></td><td>Enable/disable the Analyst. Falls back automatically if <code>claude</code> isn't on PATH.</td></tr>
+        <tr><td><code>--mode static|detonate-only|full|auto</code></td><td>What to run. <code>auto</code> is the default.</td></tr>
+        <tr><td><code>--format json|markdown|terminal|csv|sarif|agent-prompt</code></td><td>Output format. <code>csv</code> is one row per finding for spreadsheets; <code>sarif</code> feeds GitHub code scanning; <code>agent-prompt</code> writes a review brief for any AI agent. Add <code>--out FILE</code> to save it.</td></tr>
+        <tr><td><code>--fail-on malicious|suspicious|none</code></td><td>Exit 1 when a package reaches this level or worse (default: malicious).</td></tr>
+        <tr><td><code>--cache-dir DIR</code></td><td>Remember results so the next scan only checks new or changed packages.</td></tr>
+        <tr><td><code>--jobs N</code></td><td>Check N packages at once (the sandbox still runs one at a time).</td></tr>
+        <tr><td><code>--ai</code></td><td>Optional: ask your own <code>claude</code> CLI for a second opinion on encoded strings. Off by default.</td></tr>
       </tbody>
     </table>
+    <p class="section-lede" style="margin-top:1rem">Exit code: <code>0</code> nothing found · <code>1</code> findings at your <code>--fail-on</code> level · <code>2</code> some package could not be scanned.</p>
   </div>
 </section>
 
 <section id="architecture">
   <div class="shell">
     <h2>Architecture</h2>
-    <p class="section-lede">One Dossier model, two independent detection passes, a narrow AI layer used only where pattern-matching structurally can't reach.</p>
+    <p class="section-lede">One Dossier model, two detection passes (code and sandbox), and a narrow AI layer used only where pattern-matching structurally can't reach.</p>
 
     <div class="tree"><pre style="margin:0; background:none; color:inherit; padding:0;"><span class="dir">malwhunter/</span>
-├─ <span class="dir">intake/</span>      <span class="dim"># package.json/lockfile parsing, npm registry fetch, safe tarball extraction</span>
-├─ <span class="dir">recon/</span>       <span class="dim"># the static signal catalog — regex/entropy heuristics</span>
-├─ <span class="dir">chamber/</span>     <span class="dim"># Docker orchestration for the sandboxed Detonation run</span>
-├─ <span class="dir">wiretap/</span>     <span class="dim"># the recording proxy + canary/tripwire injection</span>
-├─ <span class="dir">analyst/</span>     <span class="dim"># the narrow AI-judgment layer — own prompts, own interface</span>
-├─ <span class="dir">dossier/</span>     <span class="dim"># the Dossier/Signal/Verdict model — evidence is mandatory</span>
-├─ <span class="dir">report/</span>      <span class="dim"># JSON / Markdown / terminal output</span>
-└─ cli.py          <span class="dim"># `malwhunter scan` / `malwhunter inspect`</span></pre></div>
+├─ <span class="dir">intake/</span>      <span class="dim"># npm + PyPI: lockfiles, registry fetch, checked downloads, safe unpacking</span>
+├─ <span class="dir">recon/</span>       <span class="dim"># static analysis: JavaScript syntax trees, Python ast, the signal catalog</span>
+├─ <span class="dir">chamber/</span>     <span class="dim"># the Docker sandbox: install runs, syscall trace, cleanup</span>
+├─ <span class="dir">wiretap/</span>     <span class="dim"># recording proxy, HTTPS inspection, fake-secret tripwires</span>
+├─ <span class="dir">analyst/</span>     <span class="dim"># the narrow AI second-opinion layer</span>
+├─ <span class="dir">dossier/</span>     <span class="dim"># Dossier / Signal / Verdict: evidence is mandatory</span>
+├─ <span class="dir">report/</span>      <span class="dim"># terminal, JSON, Markdown, CSV, SARIF, and the AI-agent review brief</span>
+├─ cache.py        <span class="dim"># remembers results for delta scans</span>
+└─ cli.py          <span class="dim"># `malwhunter scan` / `malwhunter inspect`, and the help screen</span></pre></div>
+  </div>
+</section>
+
+<section id="limits">
+  <div class="shell">
+    <h2>Limits</h2>
+    <p class="section-lede">MalwHunter is a heuristic tool, not a guarantee. What it cannot see:</p>
+    <ul>
+      <li>It checks install-time and import-time behavior, not what a package does later when you use it.</li>
+      <li>The sandbox watches for 30 seconds (120 for Python installs). A script that waits longer is not seen.</li>
+      <li>HTTPS is read through a certificate made for each run. A program that pins certificates only shows up as a connection attempt.</li>
+      <li>The syscall trace runs as the package's own user, so it is best-effort. Tampering is reported, and a host that blocks tracing is reported as unavailable, never as clean.</li>
+      <li>Static rules can be wrong. Use a reviewed <code>.MHignore</code> entry for a false positive.</li>
+      <li>npm needs <code>package-lock.json</code> (v2 or v3). For PyPI, one wheel per release is scanned.</li>
+    </ul>
   </div>
 </section>
 
 <section id="status">
   <div class="shell">
-    <h2>Status &amp; roadmap</h2>
-    <p class="section-lede">Early and under active development.</p>
+    <h2>Status</h2>
+    <p class="section-lede">Active development. What works today, and what is next.</p>
     <div class="status-grid">
       <div class="card yes">
-        <h3>Built &amp; live-verified</h3>
+        <h3>Built &amp; tested</h3>
         <ul>
-          <li>Recon's full catalog, real npm registry fetch, path-traversal-safe extraction</li>
-          <li>The Analyst's two-pass second opinion — proven live against a base64-encoded RCE payload regex alone can't decode</li>
-          <li>Deterministic verdict combination</li>
-          <li>JSON / Markdown / colorized terminal reporting</li>
+          <li>Static analysis of npm (syntax trees) and PyPI (<code>ast</code>) packages</li>
+          <li>Sandbox detonation of npm install scripts and <code>pip install</code>, with HTTPS inspection and a syscall trace, tested against real containers</li>
+          <li>Fake-secret tripwires: environment variables and fake <code>~/.ssh/id_rsa</code>, <code>~/.aws/credentials</code>, <code>~/.npmrc</code> and <code>~/.pypirc</code> files, caught even when re-encoded as base64, hex or URL-encoding</li>
+          <li>Four scan modes, delta scans, parallel jobs, JSON / Markdown / CSV / SARIF / terminal reports</li>
+          <li>AI-agent review brief (<code>--format agent-prompt</code>)</li>
+          <li>GitHub Action, <code>.MHignore</code> with reasons and expiry dates</li>
         </ul>
       </div>
       <div class="card no">
-        <h3>Built, not yet live-verified / not started</h3>
+        <h3>Not started</h3>
         <ul>
-          <li>The Detonation sandbox's full chain (container → proxy → tripwire) — components are individually tested, the end-to-end run needs Docker running to confirm</li>
-          <li>Ecosystems beyond npm (PyPI is structurally different)</li>
-          <li>Runtime instrumentation beyond install-lifecycle scripts</li>
-          <li>Package reputation/history signals, a CI <code>watch</code> mode</li>
+          <li>Ecosystems beyond npm and PyPI</li>
+          <li>Behavior that only appears when a package is used, not installed or imported</li>
+          <li>A user-configurable verdict policy</li>
+          <li>A CI <code>watch</code> mode</li>
+          <li>Comparing a package with its earlier versions, and a DNS log inside the sandbox</li>
+          <li>Published benchmark numbers</li>
         </ul>
       </div>
     </div>

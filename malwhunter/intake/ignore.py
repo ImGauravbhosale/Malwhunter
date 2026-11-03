@@ -37,12 +37,18 @@ class IgnoreRule:
         return self.version is None or self.version == version
 
 
-def _parse_rule(raw: dict, index: int) -> IgnoreRule:
+def _parse_rule(raw: object, index: int) -> IgnoreRule:
+    if not isinstance(raw, dict):
+        raise IgnoreFileError(f"{IGNORE_FILENAME} rule #{index}: each rule must be a JSON object")
+    for field in ("package", "reason", "version", "ecosystem", "expires"):
+        if raw.get(field) is not None and not isinstance(raw[field], str):
+            raise IgnoreFileError(f"{IGNORE_FILENAME} rule #{index}: '{field}' must be a string")
+
     package = raw.get("package")
     if not package:
         raise IgnoreFileError(f"{IGNORE_FILENAME} rule #{index}: missing required field 'package'")
 
-    reason = raw.get("reason", "").strip()
+    reason = (raw.get("reason") or "").strip()
     if not reason:
         raise IgnoreFileError(
             f"{IGNORE_FILENAME} rule #{index} ({package}): missing required field 'reason' — "
