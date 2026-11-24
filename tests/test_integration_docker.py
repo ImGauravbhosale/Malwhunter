@@ -8,7 +8,7 @@ import socket
 
 import pytest
 
-from malwhunter.chamber.runner import _docker_available, detonate_package, detonate_pypi_package
+from malwhunter.chamber.runner import detonate_package, detonate_pypi_package, sandbox_network_supported
 
 
 def _internet() -> bool:
@@ -20,7 +20,8 @@ def _internet() -> bool:
 
 
 pytestmark = pytest.mark.skipif(
-    not (_docker_available() and _internet()), reason="needs Docker and internet access"
+    not (sandbox_network_supported() and _internet()),
+    reason="needs Docker 28+ (isolated sandbox network) and internet access",
 )
 
 

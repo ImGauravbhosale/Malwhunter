@@ -189,6 +189,24 @@ class _SandboxNetworks:
         self._created.clear()
 
 
+def sandbox_network_supported() -> bool:
+    """True when this Docker can build the isolated sandbox network Detonation
+    requires (Docker 28+ isolated gateway mode, verified). Lets tests skip on
+    hosts that can only refuse to detonate, instead of failing there."""
+    if not _docker_available():
+        return False
+    import uuid
+
+    networks = _SandboxNetworks(f"probe-{uuid.uuid4().hex[:8]}")
+    try:
+        networks.create()
+        return True
+    except (DetonationUnavailable, subprocess.TimeoutExpired, OSError):
+        return False
+    finally:
+        networks.remove()
+
+
 def _force_remove_container(container_name: str) -> None:
     """`subprocess.run(timeout=...)` only kills the local `docker` client
     process — the container itself keeps running without it. `rm -f`
