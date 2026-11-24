@@ -9,14 +9,16 @@ from malwhunter.chamber import runner
 from malwhunter.chamber.runner import (
     DetonationUnavailable,
     _build_docker_command,
-    _docker_available,
     _read_capture,
     _signals_from_capture,
     detonate_package,
+    sandbox_network_supported,
 )
 from malwhunter.wiretap.proxy import CapturedBlocked, CapturedConnect, CapturedHttpRequest
 
-requires_docker = pytest.mark.skipif(not _docker_available(), reason="Docker not available in this environment")
+requires_docker = pytest.mark.skipif(
+    not sandbox_network_supported(), reason="needs Docker 28+ with the isolated sandbox network"
+)
 
 
 def test_no_lifecycle_scripts_short_circuits_without_checking_docker(tmp_path, monkeypatch):
@@ -412,3 +414,23 @@ def test_the_scratch_directory_is_reclaimed_even_when_the_run_fails(tmp_path, fa
     with pytest.raises(RuntimeError):
         detonate_package("x", "1.0.0", package_dir, package_json)
     assert any(c[:2] == ("run", "--rm") and "root" in c for c in fake_docker["calls"])
+
+
+def test_sandbox_probe_says_no_when_docker_cannot_isolate_the_network(monkeypatch):
+    # GitHub's runner image: Docker works, but the isolated gateway mode does not,
+    # so Detonation refuses to run there and the end-to-end tests must skip.
+    removed = []
+
+    def refuse(self):
+        raise DetonationUnavailable("this Docker version doesn't support isolated gateway mode")
+
+    monkeypatch.setattr(runner, "_docker_available", lambda: True)
+    monkeypatch.setattr(runner._SandboxNetworks, "create", refuse)
+    monkeypatch.setattr(runner._SandboxNetworks, "remove", lambda self: removed.append(True))
+    assert sandbox_network_supported() is False
+    assert removed  # the probe always cleans up after itself
+
+
+def test_sandbox_probe_says_no_without_docker(monkeypatch):
+    monkeypatch.setattr(runner, "_docker_available", lambda: False)
+    assert sandbox_network_supported() is False
