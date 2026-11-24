@@ -32,6 +32,7 @@ from malwhunter.dossier.model import (
 from malwhunter.dossier.verdict import dossier_verdict
 from malwhunter.intake.ignore import IgnoreFileError, apply_ignore_rules, load_ignore_rules
 from malwhunter.intake.manifest import DependencyRef, get_lifecycle_scripts, resolve_dependencies
+from malwhunter.intake.osv import find_hit, known_malware_signal, lookup_known_malware
 from malwhunter.intake.pypi_manifest import has_python_manifest, normalize_name, resolve_python_dependencies
 from malwhunter.intake.pypi_registry import check_pypi_presence, fetch_package, fetch_pypi_reputation
 from malwhunter.intake.registry import (
@@ -367,6 +368,28 @@ def _analyze_package(
     return dossier
 
 
+def _osv_lookup(enabled: bool, packages: list[tuple[str, str, str]]) -> dict | None:
+    """One batch query to OSV for every package. A failure is only a warning:
+    each package is still analyzed normally, it just isn't short-cut."""
+    if not enabled or not packages:
+        return None
+    hits = lookup_known_malware(packages)
+    if hits is None:
+        click.echo("malwhunter: warning: OSV known-malware lookup failed (offline?) — continuing with full analysis", err=True)
+    elif hits:
+        click.echo(f"malwhunter: {len(hits)} package(s) listed as malicious in OSV — not downloaded", err=True)
+    return hits
+
+
+def _known_malware_dossier(ecosystem: str, name: str, version: str, mal_ids: list[str]) -> Dossier:
+    if ecosystem == "pypi":
+        name = normalize_name(name)
+    dossier = Dossier(package=name, version=version, ecosystem=Ecosystem.PYPI if ecosystem == "pypi" else Ecosystem.NPM)
+    dossier.add_signal(known_malware_signal(ecosystem, name, version, mal_ids))
+    dossier.detonation_decision_reason = "not analyzed further: already listed as malicious in OSV"
+    return dossier
+
+
 def _require_observation(dossier: Dossier, detonate_mode: str) -> None:
     """With static analysis off, a package the sandbox did not run was never looked at in any way. That
     is UNSCANNED, never a clean result earned by skipping the checks."""
@@ -578,6 +601,13 @@ def _resolve_detonate_mode(no_detonate: bool, always_detonate: bool, mode: str |
     default=False,
     help="Optional AI second opinion on encoded strings the rules cannot read (uses your own `claude` CLI). Off by default: nothing else in MalwHunter depends on it.",
 )
+@click.option(
+    "--osv/--no-osv",
+    default=True,
+    help="Check every package against the OSV list of known malicious packages first (one request to api.osv.dev "
+    "with package names and versions). A listed package is reported as malicious without being downloaded. "
+    "--no-osv for offline or air-gapped runs.",
+)
 @click.option("--jobs", type=click.IntRange(1, 16), default=1, show_default=True,
               help="Analyze this many packages at once. Container runs still happen one at a time.")
 @click.option(
@@ -596,6 +626,7 @@ def scan(
     detonate_downloads_threshold: int,
     fail_on: str,
     ai: bool,
+    osv: bool,
     jobs: int,
     cache_dir: str | None,
 ) -> None:
@@ -626,11 +657,17 @@ def scan(
         if cache_dir and output_format != "agent-prompt"
         else None
     )
+    osv_hits = _osv_lookup(osv, [(dep.ecosystem, dep.name, dep.version) for dep in deps])
     with tempfile.TemporaryDirectory(prefix="malwhunter-") as tmp:
         workdir = Path(tmp)
 
         def analyze(dep) -> Dossier:
             click.echo(analyzing_line(dep.name, dep.version), err=True)
+            mal_ids = find_hit(osv_hits, dep.ecosystem, dep.name, dep.version)
+            if mal_ids:
+                # checked before the cache: a package reported after it was cached must not stay "clean"
+                click.echo(done_line(dep.name, dep.version), err=True)
+                return _known_malware_dossier(dep.ecosystem, dep.name, dep.version, mal_ids)
             dossier = cache.get(dep.name, dep.version, dep.ecosystem) if cache else None
             if dossier is None:
                 dossier = _analyze_safely(
@@ -700,6 +737,11 @@ def scan(
     default=False,
     help="Optional AI second opinion on encoded strings the rules cannot read (uses your own `claude` CLI). Off by default: nothing else in MalwHunter depends on it.",
 )
+@click.option(
+    "--osv/--no-osv",
+    default=True,
+    help="Check the package against the OSV list of known malicious packages first. --no-osv for offline runs.",
+)
 def inspect(
     spec: str,
     output_format: str,
@@ -710,6 +752,7 @@ def inspect(
     detonate_age_threshold: int,
     detonate_downloads_threshold: int,
     ai: bool,
+    osv: bool,
 ) -> None:
     """Deep-dive a single package, e.g. `malwhunter inspect left-pad@1.3.0`."""
     click.echo(startup_banner(spec), err=True)
@@ -731,6 +774,12 @@ def inspect(
     detonate_mode = _resolve_detonate_mode(no_detonate, always_detonate, mode)
     analyst = _select_analyst(ai)
     click.echo(analyzing_line(name, version), err=True)
+    mal_ids = find_hit(_osv_lookup(osv, [(ecosystem, name, version)]), ecosystem, name, version)
+    if mal_ids:
+        click.echo(done_line(name, version), err=True)
+        _render_and_exit(
+            [_known_malware_dossier(ecosystem, name, version, mal_ids)], f"{name}@{version}", output_format, out_path, "malicious"
+        )
     with tempfile.TemporaryDirectory(prefix="malwhunter-") as tmp:
         dossier = _analyze_safely(
             name,
